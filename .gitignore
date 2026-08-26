@@ -1,0 +1,9 @@
+# RE artifacts (never commit)
+*.pcap
+*.pcap.stderr.txt
+*.exe
+*.wav
+*.log
+capture.pid
+
+out/

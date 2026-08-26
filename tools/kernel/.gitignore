@@ -1,0 +1,12 @@
+# Out-of-tree kernel build artifacts
+*.ko
+*.ko.*
+*.o
+*.mod
+*.mod.c
+*.cmd
+.module-common.*
+Module.symvers
+modules.order
+.tmp_versions/
+.checkpatch-*
