@@ -236,6 +236,21 @@ static int babyface_probe(struct usb_interface *intf,
 		goto error;
 	}
 
+	err = babyface_create_eq(chip);
+	if (err < 0) {
+		dev_err(&intf->dev, "EQ control creation failed: %d\n", err);
+		goto error;
+	}
+
+	/* The DSP coefficient stream (EQ, bulk ep 0x0A) lives on interface
+	 * 1, which has a single altsetting (alt 0) already active in the
+	 * default configuration — the endpoint is scheduled, no
+	 * SET_INTERFACE or interface claim is needed (the earlier
+	 * -EAGAIN was the on-stack transfer buffer, and SET_INTERFACE on
+	 * interface 1 wedged the iface-5 audio stream — playback URBs
+	 * never completed).
+	 */
+
 	err = snd_card_register(chip->card);
 	if (err < 0) {
 		dev_err(&intf->dev, "snd_card_register failed: %d\n", err);
@@ -264,6 +279,13 @@ static void babyface_disconnect(struct usb_interface *intf)
 	struct snd_usb_babyface *chip = usb_get_intfdata(intf);
 
 	if (!chip)
+		return;
+
+	/* Idempotence guard: a disconnect can race a re-probe (usbfs
+	 * detach/re-attach) — tear the card down exactly once.
+	 */
+	usb_set_intfdata(intf, NULL);
+	if (chip->shutdown)
 		return;
 
 	/* Keep the mixer state for the next probe: a userspace usbfs

@@ -10,8 +10,10 @@ cd "$(dirname "$0")"
 FAIL=0
 
 echo "== law selftests =="
-for t in fader_selftest master_selftest disp_selftest; do
-	if gcc -O2 -Wall -o "/tmp/$t" "$t.c" && "/tmp/$t" > /tmp/$t.out 2>&1; then
+for t in fader_selftest master_selftest disp_selftest eq_selftest; do
+	LM=""
+	[ "$t" = eq_selftest ] && LM="-lm"
+	if gcc -O2 -Wall -o "/tmp/$t" "$t.c" $LM && "/tmp/$t" > /tmp/$t.out 2>&1; then
 		echo "  PASS  $t"
 		grep -E '^ok' /tmp/$t.out | tail -1 > /dev/null
 	else
@@ -34,7 +36,7 @@ fi
 echo "== checkpatch =="
 KP="$KSRC/scripts/checkpatch.pl"
 if [ -x "$KP" ]; then
-	for f in main.c protocol.c pcm.c mixer.c state.c panel.c \
+	for f in main.c protocol.c pcm.c mixer.c state.c panel.c eq.c \
 		 snd-usb-babyface-pro.h; do
 		if $KP --no-tree --strict -f "$f" 2>&1 | grep -qE 'ERROR|WARNING'; then
 			echo "  WARN  $f (see checkpatch below)"

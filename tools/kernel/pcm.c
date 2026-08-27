@@ -516,6 +516,8 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 		chip->rate = r->rate;
 		chip->alt = r->alt;
 		chip->frame_bytes = r->frame_bytes;
+		/* The DSP EQ coefficients depend on fs: re-upload. */
+		bf_eq_reupload(chip);
 		dev_dbg(&chip->dev->dev, "rate %u Hz (alt %u)\n",
 			chip->rate, chip->alt);
 	}

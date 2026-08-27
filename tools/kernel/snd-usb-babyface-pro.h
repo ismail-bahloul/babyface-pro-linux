@@ -251,6 +251,21 @@ struct snd_usb_babyface {
 	int width;			/* width knob -100..+100 */
 	u16 fx_send;			/* FX send level 0..0x1000 */
 
+	/* DSP EQ (eq.c) — 4 analog-input strips, params kept in state */
+	struct bf_eq_channel {
+		bool on;		/* EQ engaged (else identity blocks) */
+		s32 slope_db;		/* low-cut slope 6/12/18/24 (0 = off) */
+		s32 lc_hz;		/* low-cut freq, 0 = off */
+		u32 lc_raw;		/* cached 0x38 word */
+		u8 slope;		/* cached slope byte (2^n - 1) */
+		s32 band_type[3];	/* 0 off, 1 bell, 2 low shelf, 3 high shelf */
+		s32 band_freq[3];	/* Hz */
+		s32 band_q[3];		/* Q x 100 */
+		s32 band_gain[3];	/* dB x 10 */
+		s32 words[3][4];	/* cached c0..c3 */
+		s32 shared;		/* cached c4 (shared by the slots) */
+	} eq[4];
+
 	/* front panel (panel.c) — 0x17 readback poll */
 	struct delayed_work panel_work;
 	u8 panel_prev[4];		/* last 0x17 snapshot */
@@ -316,6 +331,12 @@ const struct bf_rate *bf_rate_lookup(unsigned int rate);
 /* ── shared driver state ─────────────────────────────────────── */
 extern const u16 bf_flag_cycle[4];
 extern const struct bf_source bf_sources[14];
+
+/* eq.c — the DSP EQ (struct snd_usb_babyface is defined above). */
+void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
+		      s32 gain_x10, s32 fs);
+void bf_eq_reupload(struct snd_usb_babyface *chip);
+int babyface_create_eq(struct snd_usb_babyface *chip);
 extern const u8 bf_xpoint_block[6];
 extern const struct snd_pcm_hw_constraint_list bf_rates_constraint;
 
