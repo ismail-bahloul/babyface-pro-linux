@@ -60,6 +60,7 @@ libasound_module_pcm_tuxmix.so  ← PipeWire via spa-alsa (sink/source)
 | Front-panel readback (0x17 poll at 50 Hz → read-only button/wheel/IN/OUT/MIX/DIM ALSA controls, panel.c) | ✅ hardware-validated 2026-08-26 (all six flash codes + wheel; consume-on-get bug fixed — controls hold the last state) |
 | Multi-channel PCM (2-12 ch, full 14-word frame) | ✅ (12-ch capture + playback verified; marker words skipped) |
 | Default mixer state at probe (TotalMix-style: all sources → all outputs at unity, masters 0 dB) | ✅ |
+| DSP EQ (eq.c): 4 strips × 3-band bell/shelf + low cut, 64-byte bulk coeff blocks on ep 0x0A | ✅ HARDWARE-VALIDATED 2026-08-27 on the mic (bell ±6 dB @ 200 Hz, +6 dB @ 3 kHz, low cut 100/300 Hz on/off; `eq_selftest` ~1 LSB vs the captures). Fixed-point Q27 (CORDIC + exp2, no FPU). NOTE: the loopback taps the record bus POST-EQ, so the input EQ is not measurable on the loopback chain (ear-validated instead) |
 | Preamp state sync from 0x17 readback at probe | ✅ |
 | Mixer-state persistence across interface re-probes (usbfs claim → detach → re-probe restores 48V/gains/crosspoints/pitch/flags) | ✅ 2026-08-24 |
 | PM: suspend/resume with full cached-state restore (cold init + mixer re-apply) | ✅ |
@@ -120,9 +121,9 @@ first-impulse method.)  Full sweep `tools/kernel/latency-sweep.sh`:
 2. **Multi-channel PCM**: expose the full 14-channel frame (PB1-6
    playback, AN1-4 + ADAT/SPDIF capture) instead of 2 ch.
 3. **Full control set**: crosspoints (the TotalMix matrix ~hundreds of
-   controls), EQ bulk uploads (0x0A), pitch/varispeed (0x1B DDS quads),
-   loopback/MS/AN1>2/width/split flags, ref levels, clock source
-   keepalive (0x10 0x05CF).
+   controls), EQ bulk uploads (0x0A) — DONE, pitch/varispeed (0x1B DDS
+   quads), loopback/MS/AN1>2/width/split flags, ref levels, clock
+   source keepalive (0x10 0x05CF).
 4. **Front panel** — DONE (2026-08-26, `panel.c`): the 0x17 readback is
    polled at 50 Hz in a delayed_work and mirrored into read-only ALSA
    controls (Front Panel Button/Wheel/In/Out/Mix/Dim).  What remains:

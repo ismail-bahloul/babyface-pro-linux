@@ -78,10 +78,10 @@ The full reference is in this repo:
 
 ## Upstream plan
 
-1. Core driver (stream + mixer + front panel) → RFC on linux-usb /
-   alsa-devel
-2. Follow-ups: the DSP EQ controls, clock source, input trim,
-   ref-level, phase, stereo split
+1. Core driver (stream + mixer + front panel + DSP EQ) → RFC on
+   linux-usb / alsa-devel
+2. Follow-ups: clock source, input trim, ref-level, phase, stereo
+   split, the EQ HF-warping / shared-c4 details
 3. The user-space mixer application lives in the sibling repo
    **TuxMix** (control stack + GUI/TUI).
 
