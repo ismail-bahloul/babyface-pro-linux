@@ -4,7 +4,8 @@
 # SELECT (do NOT tap it) and watch byte0's 0x80 "engaged" bit + byte3.
 set -u
 DEV="${1:-003/002}"
-U=/home/iswad/DATA/05_Code/Projects/TuxMix/tools/kernel/usbwrite
+U="$(dirname "$0")/usbwrite"
+[ -x "$U" ] || { gcc -o "$U" "$(dirname "$0")/usbwrite.c" || exit 1; }
 echo "== watching 0x17 readback on $DEV — HOLD SELECT for ~12 s =="
 prev=""
 i=0

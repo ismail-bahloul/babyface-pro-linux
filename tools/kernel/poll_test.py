@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# requires /tmp/usbwrite (build: gcc usbwrite.c -o /tmp/usbwrite)
 """poll_test.py — replicate TotalMix's status polling: the 5-read cycle
 (0x1c, 0x1e, 0x1f, 0x17, 0x11) at ~50 cycles/s, for `secs` seconds.
 Usage: poll_test.py <bus/dev> <secs>"""

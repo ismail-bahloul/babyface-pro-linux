@@ -297,7 +297,7 @@ then a Linux pass with parse_usb.py updates PROTOCOL.md.
 ---
 
 **Status:** the 48V/PAD/gain/audio-chain work is DONE and hardware-
-verified on Linux (see HANDOFF.md). The Windows captures that remain
+verified on Linux. The Windows captures that remain
 are for **calibration** (raw → dB tables), **EQ/FX coefficients**, the
 **higher sample rates**, and the (now non-blocking) session-start
 curiosity. The old "0x41 → 0x80 blocks 48V" framing is obsolete — 48V
@@ -802,7 +802,7 @@ items [x] as they're decoded.
 4. Rates (`cap_rates.pcap`): extract `0x1B` values per rate.
 5. Verify on hardware: set a few gains/faders from the new tables and
    re-measure with `gainsweep_full.c` / `listentest.c`.
-6. Update PROTOCOL.md / HANDOFF.md, then sync both copies
+6. Update PROTOCOL.md / CALIBRATION.md, then sync both copies
    (`rsync -a --exclude target --exclude .git --exclude .claude
    <src>/ <dst>/).
 

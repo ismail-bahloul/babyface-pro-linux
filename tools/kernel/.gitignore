@@ -10,3 +10,6 @@ Module.symvers
 modules.order
 .tmp_versions/
 .checkpatch-*
+
+# front-panel probe helper (built from usbwrite.c)
+usbwrite

@@ -9,7 +9,8 @@
 #   default bus/dev = 003/002.  Press MIX on the card FIRST (fader mode).
 set -u
 DEV="${1:-003/002}"
-U=/home/iswad/DATA/05_Code/Projects/TuxMix/tools/kernel/usbwrite
+U="$(dirname "$0")/usbwrite"
+[ -x "$U" ] || { gcc -o "$U" "$(dirname "$0")/usbwrite.c" || exit 1; }
 
 echo "== MIX display shadow sweep on $DEV =="
 echo "   (watch the input VU meters for a single flashing LED)"

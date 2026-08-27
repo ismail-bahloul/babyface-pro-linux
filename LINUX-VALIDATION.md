@@ -1,28 +1,24 @@
 # Linux validation — Babyface Pro FS proprietary mode (2026-08-22)
 
 Purpose: **validate on real hardware** everything reverse-engineered
-from Windows USBPcap captures (this session). The captures prove what
-the Windows driver SENDS; this checklist proves TuxMix WORKS. Do these
+from Windows USBPcap captures. The captures prove what the Windows
+driver SENDS; this log proves the protocol and driver WORK.  Recorded
 on CachyOS with the Babyface Pro FS plugged in proprietary mode
 (VID `2a39`, PID `3fc0`).
 
+> Historical note: the early entries (2026-08-22 to 08-24) were run
+> with the userspace RE harness (`tuxmix-usb`, now in the sibling
+> TuxMix repo) before the kernel driver existed; from 2026-08-25 the
+> entries exercise the kernel driver directly.
+
 The protocol facts referenced below are in
-`tools/usbdump/PROTOCOL.md` (source of truth), `CALIBRATION.md`
-and `HANDOFF.md`.
+`tools/usbdump/PROTOCOL.md` (source of truth) and `CALIBRATION.md`.
 
-## 0. Get the repo + build
+## 0. Setup
 
-The Windows repo lives on the **SHARED** partition (`D:\TuxMix`, NTFS
-volume labelled SHARED). Copy it to the native Linux filesystem
-(building on NTFS is very slow), excluding the 26 GB of Windows build
-artifacts:
-
-```bash
-mkdir -p ~/tuxmix
-rsync -a --exclude target --exclude .git --exclude .claude \
-  /run/media/$USER/SHARED/TuxMix/ ~/tuxmix/
-cd ~/tuxmix
-
+Development happens on a Linux machine; a Windows machine with the
+card served as the capture/measurement rig.  To reproduce the
+measurements you only need this repo and the card.
 # USB backend + examples
 cargo build -p tuxmix-usb --features driver --examples
 # TUI (USB backend; ALSA optional)
@@ -564,5 +560,5 @@ pads conservatively; a lean in-kernel driver can go lower).
 ## Report back
 
 For each step: command, expected vs actual, and whether the sound/LED
-actually changed. Update PROTOCOL.md / CALIBRATION.md / HANDOFF.md with
+actually changed. Update PROTOCOL.md / CALIBRATION.md with
 any corrections, then sync back to the SHARED partition.

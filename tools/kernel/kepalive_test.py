@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""kepalive_test.py — replicate TotalMix's streaming keepalive cycle:
+"""kepalive_test.py — requires /tmp/usbwrite (build: gcc usbwrite.c -o /tmp/usbwrite)
+
+replicate TotalMix's streaming keepalive cycle:
 trio (0x10 0x8000, 0x1D, 0x14 0xC000) -> 1.2s -> 0x13 0xC000 -> 0.25s -> ...
 Usage: kepalive_test.py <bus/dev> <seconds>"""
 import subprocess, sys, time

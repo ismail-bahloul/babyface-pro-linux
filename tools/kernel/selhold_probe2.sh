@@ -4,7 +4,8 @@
 # Prints every frame so the tap vs hold vs release pattern is exact.
 set -u
 DEV="${1:-003/002}"
-U=/home/iswad/DATA/05_Code/Projects/TuxMix/tools/kernel/usbwrite
+U="$(dirname "$0")/usbwrite"
+[ -x "$U" ] || { gcc -o "$U" "$(dirname "$0")/usbwrite.c" || exit 1; }
 echo "== every-frame 0x17 dump on $DEV — taps, hold, release =="
 i=0
 while [ "$i" -lt 400 ]; do
