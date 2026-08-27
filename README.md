@@ -1,4 +1,4 @@
-# snd-usb-babyface-pro — RME Babyface Pro FS (proprietary mode) Linux driver
+# snd-usb-babyface-pro: Linux driver for the RME Babyface Pro FS (proprietary mode)
 
 A from-scratch Linux kernel driver for the **RME Babyface Pro FS**
 audio interface running in its **proprietary USB mode**
@@ -16,9 +16,9 @@ The device presents two USB personalities:
   vendor-control surface (the TotalMix-class control set).
 
 The proprietary mode is the interesting one: it exposes the full
-channel count, the hardware DSP mixer, and — with this driver — a
-streaming latency floor of **0.33 ms** (16-frame URBs @ 48 kHz, 0
-xruns) that Windows cannot reach (its floor is 46 samples).
+channel count and the hardware DSP mixer, and with this driver it
+reaches a streaming latency floor of **0.33 ms** (16-frame URBs @ 48
+kHz, 0 xruns) that Windows cannot match (its floor is 46 samples).
 
 ## Status
 
@@ -36,10 +36,10 @@ xruns) that Windows cannot reach (its floor is 46 samples).
   volume / MIX-monitoring / balance modes, the MIX-mode VU display,
   SET = phantom toggle
 - **PM**: suspend/resume with mixer-state restore
-- **Automated checks**: `regress.sh` — 40/40 on hardware (rate ×
+- **Automated checks**: `regress.sh` passes 40/40 on hardware (rate ×
   period sweep with 0 xruns, start/stop stress, mixer-restore across
-  unbind/rebind, disconnect mid-stream); `selftests.sh` — the law
-  selftests + build + checkpatch without the card
+  unbind/rebind, disconnect mid-stream); `selftests.sh` runs the law
+  selftests, the build, and checkpatch without the card
 
 ## Build & load
 
@@ -67,14 +67,14 @@ The protocol was reverse-engineered from USBPcap captures of the
 Windows driver + TotalMix FX, then validated bit-by-bit on hardware.
 The full reference is in this repo:
 
-- **`tools/usbdump/PROTOCOL.md`** — every vendor request, the register
+- **`tools/usbdump/PROTOCOL.md`**: every vendor request, the register
   maps, the front-panel protocol, the stream layout
-- **`tools/usbdump/CALIBRATION.md`** — the calibrated laws (fader
+- **`tools/usbdump/CALIBRATION.md`**: the calibrated laws (fader
   curve, master curve, gain laws, EQ biquad)
-- **`tools/usbdump/`** — the capture-analysis tools (the captures
+- **`tools/usbdump/`**: the capture-analysis tools (the captures
   themselves are not in the repo)
-- **`KERNEL-DRIVER.md`** — the driver architecture + known gaps
-- **`LINUX-VALIDATION.md`** — the hardware validation log
+- **`KERNEL-DRIVER.md`**: the driver architecture + known gaps
+- **`LINUX-VALIDATION.md`**: the hardware validation log
 
 ## Upstream plan
 
