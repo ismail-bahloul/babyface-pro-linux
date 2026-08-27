@@ -270,6 +270,8 @@ struct snd_usb_babyface {
 	struct delayed_work panel_work;
 	u8 panel_prev[4];		/* last 0x17 snapshot */
 	bool panel_seen;		/* first snapshot taken */
+	bool panel_select_armed;	/* device SELECT cycle armed (IN switch disarms) */
+	unsigned long panel_start;	/* jiffies at panel_start (boot re-assert) */
 	int panel_button;		/* latched button event (consumed on get) */
 	int panel_wheel;		/* accumulated wheel delta (consumed on get) */
 	int panel_in;			/* enum: 0 unknown, 1 Ch1/2, 2 Ch3/4, 3 Opt */

@@ -503,6 +503,17 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 		return;
 	}
 
+	/* The udev alsactl restore (~100 ms after probe) clobbers the host
+	 * SELECT with a stale stored value (the control is VOLATILE but
+	 * this alsactl stores/restores it anyway) — re-assert the device's
+	 * power-on state (nothing selected, cycle disarmed) for the first
+	 * ~3 s so the boot always starts in sync.
+	 */
+	if (time_is_before_jiffies(chip->panel_start + 3 * HZ)) {
+		chip->panel_select = 3;
+		chip->panel_select_armed = false;
+	}
+
 	/* Button flash (byte3 over the 0x40 idle base). */
 	btn = bf_panel_button_decode(st[3]);
 	if (btn)
@@ -561,6 +572,11 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 			chip->panel_select = 3;
 			bf_panel_notify(chip, BF_PANEL_KCTL_SELECT);
 		}
+		/* An IN-pair switch disarms the device's SELECT cycle: the
+		 * next press only re-arms it (no step), the one after that
+		 * cycles (device behavior, user-verified 2026-08-28).
+		 */
+		chip->panel_select_armed = false;
 		bf_panel_notify(chip, BF_PANEL_KCTL_IN);
 	}
 	out = bf_panel_out_decode(st[1] & 0x07);
@@ -575,7 +591,15 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 	 */
 	if (st[3] == BF_PANEL_FLASH_SELECT &&
 	    chip->panel_prev[3] != BF_PANEL_FLASH_SELECT) {
-		chip->panel_select = (chip->panel_select + 1) & 3;
+		if (!chip->panel_select_armed) {
+			/* Disarmed (IN switch since the last step): the press
+			 * only re-arms the cycle — the device steps on the
+			 * NEXT press (user-verified 2026-08-28).
+			 */
+			chip->panel_select_armed = true;
+		} else {
+			chip->panel_select = (chip->panel_select + 1) & 3;
+		}
 		bf_panel_notify(chip, BF_PANEL_KCTL_SELECT);
 	}
 	/* SELECT hold (the OUT-balance gesture, manual §5.1 "Output
@@ -692,6 +716,15 @@ void babyface_panel_work(struct work_struct *work)
 void babyface_panel_start(struct snd_usb_babyface *chip)
 {
 	chip->panel_seen = false;
+	/* The device boots with NOTHING selected (the SELECT cycle starts
+	 * at none → AN1 → AN2 → both → none) — the unreadable selection
+	 * must start there too, or every later SET is off by one channel
+	 * (host at AN1 while the LEDs show nothing → first SELECT makes
+	 * the device blink AN1 but the host believes AN2).
+	 */
+	chip->panel_select = 3;	/* none */
+	chip->panel_select_armed = true;
+	chip->panel_start = jiffies;
 	schedule_delayed_work(&chip->panel_work, 0);
 }
 
