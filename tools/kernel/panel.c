@@ -432,7 +432,7 @@ static void bf_panel_balance_wheel(struct snd_usb_babyface *chip, int delta)
  * emulator, hardware-verified).  Restricted to IN mode + Ch1/2 (the
  * phantom-capable pair); Opt/Ch3/4 and SELECT None = no target.
  */
-static void bf_panel_set_phantom(struct snd_usb_babyface *chip)
+static void bf_panel_set_phantom(struct snd_usb_babyface *chip, u8 dev)
 {
 	u16 bits = 0;
 	int m;
@@ -446,17 +446,21 @@ static void bf_panel_set_phantom(struct snd_usb_babyface *chip)
 		bits |= BF_PREAMP_48V_MIC2;
 
 	mutex_lock(&chip->mutex);
-	/* One channel selected: toggle it.  Both selected: ALIGN both to
-	 * the same state, so repeated SET presses cycle all-on <-> all-off
-	 * (a mixed phantom state cannot persist with both selected).
+	/* Toggle on the DEVICE's actual 48V/PAD flags (the readback
+	 * byte0 mirrors them) — the chip->preamp cache can be stale when
+	 * a SELECT was swallowed by the device (2026-08-27: SET after a
+	 * desynced selection used to flip the phantom on the device
+	 * without the cache following).  One channel selected: toggle it.
+	 * Both selected: ALIGN both, so repeated SET presses cycle
+	 * all-on <-> all-off (a mixed phantom state cannot persist).
 	 */
 	if (chip->panel_select == 2) {
-		if ((chip->preamp & bits) == bits)
-			chip->preamp &= ~bits;
+		if ((dev & 0x03) == 0x03)
+			chip->preamp = dev & ~0x03;
 		else
-			chip->preamp |= bits;
+			chip->preamp = dev | 0x03;
 	} else {
-		chip->preamp ^= bits;
+		chip->preamp = dev ^ bits;
 	}
 	bf_preamp_state_write(chip);
 	for (m = 0; m < 4; m++)
@@ -486,6 +490,7 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 
 	if (bf_vendor_read(chip, BF_REQ_PREAMP, BF_REG_PANEL_READ, st) < 0)
 		return;	/* device gone / busy — retry next tick */
+	chip->panel_tick++;
 
 	if (!chip->panel_seen) {
 		chip->panel_seen = true;
@@ -503,10 +508,30 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 		return;
 	}
 
+	/* The readback byte0 mirrors the device's 48V/PAD flags — resync
+	 * the cache so the phantom/PAD controls and the SET logic always
+	 * see the hardware state (a SET with a stale cache used to drift
+	 * the device flags away from the controls).
+	 */
+	chip->preamp = (chip->preamp & ~0x13) | (st[0] & 0x13);
+
 	/* Button flash (byte3 over the 0x40 idle base). */
 	btn = bf_panel_button_decode(st[3]);
-	if (btn)
+	if (btn) {
 		chip->panel_button = btn;
+		/* The device swallows a SELECT right after a BURST of presses
+		 * (IN/MIX spam, raw-capture verified 2026-08-27) — arm the
+		 * SELECT-block window only when two non-SELECT flashes land
+		 * within ~800 ms of each other, so the normal single-press
+		 * flow (IN then SELECT) is never blocked.  The SELECT's own
+		 * flash never arms it.
+		 */
+		if (st[3] != BF_PANEL_FLASH_SELECT) {
+			if (chip->panel_tick - chip->panel_last_btn < 40)
+				chip->panel_burst_until = chip->panel_tick + 125;
+			chip->panel_last_btn = chip->panel_tick;
+		}
+	}
 
 	/* Wheel: signed 4-bit wrap delta of the byte2 low nibble — only
 	 * while the mode class is unchanged.  A mode switch (IN 0x4x →
@@ -572,9 +597,22 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 	/* SELECT press cycles the channel selection L → R → both → none
 	 * → L (manual §5.1).  The state is NOT in the readback
 	 * (panelprobe 2026-08-24), so it is tracked host-side.
+	 *
+	 * Qualification: the device swallows SELECT presses right after a
+	 * burst (raw-capture + ear verified 2026-08-27 — fast IN ×3
+	 * scrolling or MIX spam, then a SELECT the LEDs never show; the
+	 * readback is byte-identical to a processed press, so the host
+	 * cannot detect it).  Counting the swallowed press desyncs the
+	 * host selection from the device's (SET then toggles the wrong
+	 * channel).  Drop a SELECT while a button-burst block window is
+	 * armed (125 ticks ≈ 2.5 s after the last burst press — raw
+	 * captures show the device swallowing a SELECT up to ~2 s after
+	 * an IN/MIX burst, while clean presses always process).  A
+	 * dropped press is visible (no LED) and re-pressable.
 	 */
 	if (st[3] == BF_PANEL_FLASH_SELECT &&
-	    chip->panel_prev[3] != BF_PANEL_FLASH_SELECT) {
+	    chip->panel_prev[3] != BF_PANEL_FLASH_SELECT &&
+	    chip->panel_tick >= chip->panel_burst_until) {
 		chip->panel_select = (chip->panel_select + 1) & 3;
 		bf_panel_notify(chip, BF_PANEL_KCTL_SELECT);
 	}
@@ -594,7 +632,7 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 	 */
 	if (st[3] == BF_PANEL_FLASH_SET &&
 	    chip->panel_prev[3] != BF_PANEL_FLASH_SET)
-		bf_panel_set_phantom(chip);
+		bf_panel_set_phantom(chip, st[0]);
 
 	/* MIX (fader mode) — HOST-latched, like TotalMix (cap_mix.pcap,
 	 * cap_select2.pcap): the raw press readback is `0D 0D 41 44` —

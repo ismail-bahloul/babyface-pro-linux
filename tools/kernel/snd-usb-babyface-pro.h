@@ -285,6 +285,9 @@ struct snd_usb_babyface {
 	int panel_select;		/* SELECT state: 0 L, 1 R, 2 both, 3 none
 					 * (host-tracked — not in the readback)
 					 */
+	unsigned int panel_tick;	/* poll tick counter (20 ms each) */
+	unsigned int panel_last_btn;	/* tick of the last non-SELECT flash */
+	unsigned int panel_burst_until;	/* SELECTs blocked until this tick */
 	int panel_sel_hold;		/* consecutive ticks with byte3 = 0x50
 					 * (SELECT held > 200 ms = the OUT-balance
 					 * gesture; a tap flashes only ~100-150 ms,
