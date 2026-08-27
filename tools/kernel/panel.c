@@ -446,11 +446,18 @@ static void bf_panel_set_phantom(struct snd_usb_babyface *chip)
 		bits |= BF_PREAMP_48V_MIC2;
 
 	mutex_lock(&chip->mutex);
-	/* Toggle on the first target, mirror to the others. */
-	if (bits & BF_PREAMP_48V_MIC1)
-		chip->preamp ^= BF_PREAMP_48V_MIC1;
-	if (bits & BF_PREAMP_48V_MIC2)
-		chip->preamp ^= BF_PREAMP_48V_MIC2;
+	/* One channel selected: toggle it.  Both selected: ALIGN both to
+	 * the same state, so repeated SET presses cycle all-on <-> all-off
+	 * (a mixed phantom state cannot persist with both selected).
+	 */
+	if (chip->panel_select == 2) {
+		if ((chip->preamp & bits) == bits)
+			chip->preamp &= ~bits;
+		else
+			chip->preamp |= bits;
+	} else {
+		chip->preamp ^= bits;
+	}
 	bf_preamp_state_write(chip);
 	for (m = 0; m < 4; m++)
 		chip->panel_mix_disp[m] = 0;
@@ -544,6 +551,16 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 	in = bf_panel_in_decode((st[2] >> BF_PANEL_IN_SHIFT) & 0x7);
 	if (in && in != chip->panel_in) {
 		chip->panel_in = in;
+		/* The card CLEARS its L/R/both selection on an IN pair
+		 * switch (user-verified 2026-08-27): re-sync the host-
+		 * tracked SELECT so SET / the wheel / MIX target nothing
+		 * until the user picks a channel again.  This is the main
+		 * anti-desync hook (the physical state is not readable).
+		 */
+		if (chip->panel_select != 3) {
+			chip->panel_select = 3;
+			bf_panel_notify(chip, BF_PANEL_KCTL_SELECT);
+		}
 		bf_panel_notify(chip, BF_PANEL_KCTL_IN);
 	}
 	out = bf_panel_out_decode(st[1] & 0x07);
@@ -777,6 +794,31 @@ static int bf_panel_select_get(struct snd_kcontrol *kctl,
 	return 0;
 }
 
+/* Writable so software (or the user, after a driver reload) can
+ * re-sync the host-tracked SELECT state to the physical card — the
+ * L/R/both/none state is NOT in the 0x17 readback, so a reload starts
+ * at "Left" while the card may sit at any position; a desync makes
+ * SET / the wheel / MIX target the wrong channel.  Writing the
+ * physical state re-aligns the emulation (TotalMix parity: it also
+ * lets software select channels directly).
+ */
+static int bf_panel_select_put(struct snd_kcontrol *kctl,
+			       struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	unsigned int v = ucontrol->value.enumerated.item[0];
+	int ret = 0;
+
+	if (v > 3)
+		return -EINVAL;
+	if (v != chip->panel_select) {
+		chip->panel_select = v;
+		bf_panel_notify(chip, BF_PANEL_KCTL_SELECT);
+		ret = 1;
+	}
+	return ret;
+}
+
 /* Shared boolean get — private_value selects mix (0) / dim (1). */
 static int bf_panel_bool_get(struct snd_kcontrol *kctl,
 			     struct snd_ctl_elem_value *ucontrol)
@@ -878,9 +920,11 @@ int babyface_create_panel(struct snd_usb_babyface *chip)
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 		.name = "Front Panel Select",
 		.access = SNDRV_CTL_ELEM_ACCESS_READ |
+			  SNDRV_CTL_ELEM_ACCESS_WRITE |
 			  SNDRV_CTL_ELEM_ACCESS_VOLATILE,
 		.info = bf_panel_select_info,
 		.get = bf_panel_select_get,
+		.put = bf_panel_select_put,
 	}, chip);
 	err = snd_ctl_add(chip->card, kctl);
 	if (err < 0)
