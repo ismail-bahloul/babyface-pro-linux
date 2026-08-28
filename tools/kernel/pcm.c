@@ -35,7 +35,7 @@ static bool babyface_capture_copy(struct snd_usb_babyface *chip,
 	spin_lock(&chip->lock);
 	pos = chip->hw_ptr[SNDRV_PCM_STREAM_CAPTURE] % buf_frames;
 	for (f = 0; f < frames; f++) {
-		const u32 *w = (const u32 *)(data + f * chip->frame_bytes);
+		const __le32 *w = (const __le32 *)(data + f * chip->frame_bytes);
 
 		dst = rt->dma_area + frames_to_bytes(rt, pos);
 		for (i = 0; i < chans; i++) {
@@ -115,7 +115,7 @@ static bool babyface_playback_copy(struct snd_usb_babyface *chip,
 	}
 	pos = chip->hw_ptr[SNDRV_PCM_STREAM_PLAYBACK] % buf_frames;
 	for (f = 0; f < frames; f++) {
-		u32 *w = (u32 *)(data + f * chip->frame_bytes);
+		__le32 *w = (__le32 *)(data + f * chip->frame_bytes);
 
 		src = rt->dma_area + frames_to_bytes(rt, pos);
 		/* App ch n feeds the device word n (PB1-6 = words 0-11);
@@ -255,7 +255,7 @@ void babyface_stream_kill(struct snd_usb_babyface *chip)
  * wake with a clean error: XRUN for a recoverable stream error, or
  * DISCONNECTED when the card is going away.
  */
-void babyface_pcm_stop_both(struct snd_usb_babyface *chip, int state)
+void babyface_pcm_stop_both(struct snd_usb_babyface *chip, snd_pcm_state_t state)
 {
 	int s;
 

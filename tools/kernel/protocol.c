@@ -23,7 +23,7 @@ const u16 bf_flag_cycle[4] = { 0xc000, 0x4000, 0x8000, 0x0000 };
 /* ── sample-rate / alt classes ─────────────────────────────── */
 
 
-const struct bf_rate bf_rates[] = {
+static const struct bf_rate bf_rates[] = {
 	{  32000, BF_ALT_1, 56,  8 },
 	{  44100, BF_ALT_1, 56,  8 },
 	{  48000, BF_ALT_1, 56,  8 },
@@ -35,7 +35,7 @@ const struct bf_rate bf_rates[] = {
 	{ 192000, BF_ALT_3, 32, 32 },
 };
 
-const unsigned int bf_rate_list[ARRAY_SIZE(bf_rates)] = {
+static const unsigned int bf_rate_list[ARRAY_SIZE(bf_rates)] = {
 	32000, 44100, 48000, 64000, 88200,
 	96000, 128000, 176400, 192000,
 };
