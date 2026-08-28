@@ -27,8 +27,7 @@
 /* The transaction-flag counter cycle on 16-bit writes. */
 const u16 bf_flag_cycle[4] = { 0xc000, 0x4000, 0x8000, 0x0000 };
 
-/* ── sample-rate / alt classes ─────────────────────────────── */
-
+/* ── sample-rate / alt classes ──────────────────── */
 
 static const struct bf_rate bf_rates[] = {
 	{  32000, BF_ALT_1, 56,  8 },
@@ -63,7 +62,7 @@ const struct bf_rate *bf_rate_lookup(unsigned int rate)
 	return NULL;
 }
 
-/* ── vendor requests ───────────────────────────────────────── */
+/* ── vendor requests ─────────────────────── */
 
 int bf_vendor_write(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx)
 {
@@ -146,7 +145,7 @@ int bf_cold_init(struct snd_usb_babyface *chip)
  * L-registers (5,7,…23) + 10 even R-registers (4,6,…22).
  */
 int bf_crosspoint_clear_cross(struct snd_usb_babyface *chip,
-				     unsigned int blk)
+			      unsigned int blk)
 {
 	int ret, k;
 	u16 flag;
@@ -470,11 +469,11 @@ void bf_state_purge(void)
 	mutex_unlock(&bf_saved_mutex);
 }
 
-/* ── stream (interrupt URBs, caiaq-style) ──────────────────── */
+/* ── stream (interrupt URBs, caiaq-style) ──────────────── */
 
 static bool babyface_capture_copy(struct snd_usb_babyface *chip,
-				   struct snd_pcm_substream *subs,
-				   const u8 *data, unsigned int frames)
+				  struct snd_pcm_substream *subs,
+				  const u8 *data, unsigned int frames)
 {
 	struct snd_pcm_runtime *rt = subs->runtime;
 	unsigned int buf_frames = rt->buffer_size;
@@ -626,8 +625,8 @@ static void babyface_complete_in(struct urb *urb)
 			frames = urb->actual_length / chip->frame_bytes;
 			if (frames)
 				crossed = babyface_capture_copy(chip, subs,
-							       urb->transfer_buffer,
-							       frames);
+								urb->transfer_buffer,
+								frames);
 		}
 		snd_pcm_stream_unlock_irqrestore(subs, flags);
 		if (crossed)
@@ -670,7 +669,7 @@ static void babyface_complete_out(struct urb *urb)
 		if (snd_pcm_running(subs)) {
 			frames = chip->frames_per_urb;
 			crossed = babyface_playback_copy(chip, subs,
-							urb->transfer_buffer, frames);
+							 urb->transfer_buffer, frames);
 		}
 		snd_pcm_stream_unlock_irqrestore(subs, flags);
 		if (crossed)
@@ -860,7 +859,7 @@ err:
 	mutex_unlock(&chip->mutex);
 }
 
-/* ── PCM ───────────────────────────────────────────────────── */
+/* ── PCM ─────────────────────────── */
 
 static const struct snd_pcm_hardware babyface_pcm_hw = {
 	.info = SNDRV_PCM_INFO_INTERLEAVED |
@@ -1066,7 +1065,7 @@ MODULE_PARM_DESC(nurbs, "URBs in flight per direction, 1..16 (16 = low-latency).
 module_param(panel_poll_ms, int, 0644);
 MODULE_PARM_DESC(panel_poll_ms, "Front-panel poll interval in ms, 10..1000 (20 = default, matches Windows' ~50 Hz).");
 
-/* ── USB driver ────────────────────────────────────────────── */
+/* ── USB driver ───────────────────────── */
 
 static void babyface_private_free(struct snd_card *card)
 {
@@ -1253,7 +1252,7 @@ static int babyface_probe(struct usb_interface *intf,
 	 * it); vmalloc is the standard choice for that.
 	 */
 	err = snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_VMALLOC,
-					      NULL, 0, 1 << 20);
+					     NULL, 0, 1 << 20);
 	if (err < 0) {
 		dev_err(&intf->dev, "buffer allocation failed: %d\n", err);
 		goto error;

@@ -255,7 +255,7 @@ static int bf_apply_masters(struct snd_usb_babyface *chip)
 	return 0;
 }
 
-/* ── mixer controls ────────────────────────────────────────── */
+/* ── mixer controls ──────────────────────── */
 
 /* dB TLV for the output masters: 0x2000 = 0 dB, 0x4000 = +6 dB
  * (CALIBRATION.md) with the hardware 20*log10(v/0x2000) law — the raw
@@ -610,7 +610,7 @@ static int bf_pitch_put(struct snd_kcontrol *kctl,
 		goto out;
 	/* Every quad must be followed by the clock keepalive. */
 	ret = bf_vendor_write(chip, BF_REQ_KEEPALIVE, 0x0001,
-			       BF_REG_KEEPALIVE_SETTINGS);
+			      BF_REG_KEEPALIVE_SETTINGS);
 	if (ret < 0)
 		goto out;
 
@@ -639,7 +639,7 @@ static int bf_loopback_get(struct snd_kcontrol *kctl,
  * sometimes failed to disengage on the hardware).
  */
 int bf_loopback_write_map(struct snd_usb_babyface *chip, int out,
-				 bool on)
+			  bool on)
 {
 	int ch, ret;
 
@@ -1587,8 +1587,8 @@ static void bf_panel_mix_wheel(struct snd_usb_babyface *chip, int delta)
 
 			if (disp != chip->panel_mix_disp[targets[i]]) {
 				bf_vendor_write(chip, BF_REQ_GAIN,
-						 (u16)disp,
-						 BF_REG_PANEL_GAIN + targets[i]);
+						(u16)disp,
+						BF_REG_PANEL_GAIN + targets[i]);
 				chip->panel_mix_disp[targets[i]] = disp;
 			}
 		}
@@ -1967,8 +1967,8 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 			for (m = 0; m < 4; m++)
 				chip->panel_mix_disp[m] = 0;
 			if (ref < 4) {
-				int disp = bf_mix_display(
-					bf_fader_raw_to_db2(chip->panel_mix_raw));
+				int db2 = bf_fader_raw_to_db2(chip->panel_mix_raw);
+				int disp = bf_mix_display(db2);
 
 				bf_vendor_write(chip, BF_REQ_GAIN, (u16)disp,
 						BF_REG_PANEL_GAIN + ref);
@@ -2030,7 +2030,7 @@ void babyface_panel_stop(struct snd_usb_babyface *chip)
 	cancel_delayed_work_sync(&chip->panel_work);
 }
 
-/* ── controls ────────────────────────────────────────────────── */
+/* ── controls ────────────────────────── */
 
 /* The button/wheel controls hold the LATEST state and are NOT consumed
  * on read: wireplumber subscribes to every notifying control and reads
@@ -2110,13 +2110,13 @@ static int bf_panel_out_get(struct snd_kcontrol *kctl,
 }
 
 static int bf_panel_select_info(struct snd_kcontrol *kctl,
-				   struct snd_ctl_elem_info *uinfo)
+				struct snd_ctl_elem_info *uinfo)
 {
 	return snd_ctl_enum_info(uinfo, 1, 4, bf_panel_select_texts);
 }
 
 static int bf_panel_select_get(struct snd_kcontrol *kctl,
-				   struct snd_ctl_elem_value *ucontrol)
+			       struct snd_ctl_elem_value *ucontrol)
 {
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
 
@@ -2343,7 +2343,10 @@ void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 		 * with — a user setting gain before Q used to hit a kernel
 		 * divide-by-zero oops).
 		 */
-		w[0] = w[1] = w[2] = w[3] = 0;
+		w[0] = 0;
+		w[1] = 0;
+		w[2] = 0;
+		w[3] = 0;
 		return;
 	}
 
@@ -2412,7 +2415,6 @@ void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 	w[4] = (s32)((b0 * BF_EQ_Q27 + a0 / 2) / a0);
 }
 
-
 /* ---- low cut ---- */
 
 /* Slope byte: 2^n-1 (n poles) -> 6/12/18/24 dB per oct; 0 = off. */
@@ -2450,7 +2452,6 @@ static u32 bf_eq_lc_freq_raw(s32 freq_hz, s32 slope_db)
 	case 24:
 		f = f * 6977 / 10000;
 		break;
-
 	}
 	word = (11508 * f * 11656 + (11656 + f) / 2) / (11656 + f);
 	return (u32)word;
@@ -2579,6 +2580,7 @@ void bf_eq_reupload(struct snd_usb_babyface *chip)
 static const char *const bf_eq_type_texts[] = {
 	"Off", "Bell", "Low Shelf", "High Shelf", NULL
 };
+
 static const char *const bf_eq_slope_texts[] = {
 	"6 dB/oct", "12 dB/oct", "18 dB/oct", "24 dB/oct", NULL
 };
@@ -2657,7 +2659,6 @@ static int bf_eq_get(struct snd_kcontrol *kctl,
 	case 14:
 		v = &e->slope_db;
 		break;
-
 	}
 	if (param == 14) {
 		/* Inverse of put's index->dB map: slope_db stores the raw
@@ -2726,7 +2727,6 @@ static int bf_eq_put(struct snd_kcontrol *kctl,
 	case 14:
 		v = &e->slope_db;
 		break;
-
 	}
 	if (param == 14)	/* slope enum items are 6/12/18/24 */
 		nv = nv == 0 ? 6 : nv == 1 ? 12 : nv == 2 ? 18 : 24;

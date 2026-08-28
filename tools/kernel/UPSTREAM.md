@@ -103,6 +103,30 @@ F:	sound/usb/babyfacepro.h
    3-state map, the EQ HF warp.
 6. **Device naming**: the module/card name is `Babyface Pro FS`
    (the FS suffix matters — the non-FS unit has a different PID).
+7. **linux-next compile test + get_maintainer.pl** — DONE 2026-08-28:
+   shallow-cloned linux-next (20260828 snapshot), `make modules_prepare`
+   (not a full build — no Module.symvers, so MODPOST is symbol-unresolved
+   by design; `KBUILD_MODPOST_WARN=1` gets past that to confirm the .ko
+   still links). Compiled clean against today's headers, zero source
+   changes needed. Also ran linux-next's own (newer) `checkpatch.pl
+   --strict`, which surfaced 34 CHECK-level style nits `selftests.sh`
+   silently misses (it only grep-filters for ERROR|WARNING, not CHECK) —
+   fixed 30 of them (alignment-to-open-paren, stray blank lines, a
+   chained assignment, a line ending in `(`); left 4 as deliberate
+   false positives: `bInterfaceNumber` (CamelCase — it's usb.h's own
+   struct field, not renameable), `(1 << 27)` → `BIT()` (declined —
+   `BIT()` returns `unsigned long`, risky in this file's signed
+   `s32`/`s64` Q27 fixed-point math), and `ang` "misspelled" ×2 (a
+   real CORDIC angle variable, not a typo — this is literally the
+   same false "fix" that `checkpatch --fix-inplace` silently applied
+   when first tried, which is also why `--fix-inplace` output was
+   discarded wholesale rather than trusted: it also changed
+   `(1 << 27)` to `BIT()` unprompted).
+   `get_maintainer.pl -f` (run from the linux-next tree with the new
+   files copied to their target `sound/usb/` paths) →
+   Jaroslav Kysela <perex@perex.cz>, Takashi Iwai <tiwai@suse.com>,
+   linux-sound@vger.kernel.org, linux-kernel@vger.kernel.org. Re-run
+   before actually mailing — MAINTAINERS entries can change.
 
 ## Build / test commands
 
