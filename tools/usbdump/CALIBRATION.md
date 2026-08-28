@@ -74,10 +74,13 @@ master sweep (ctlout_as_test.txt): the 8-bit descends 1 per ~0.5 dB
 (silence), top 0xFF = +6 dB, mute code 0x3B. Formula:
 `8bit = 0xF3 + 2·dB = 0xF3 + 12·log2(v16/0x2000)`.
 
-`tuxmix-core/src/usb.rs` `set_volume(Output)` currently writes a
-CONSTANT 0xF3 to the 8-bit register — the master volume is therefore
-BROKEN in the user-space stack too (only mute works). Fix: derive the
-8-bit code from the dB (see the kernel driver's `bf_master_8bit()`).
+**Fixed** (verified 2026-08-28, was still open when this note was
+written): `tuxmix-core/src/usb.rs`'s `set_volume(Output)` now derives
+the 8-bit code from the dB via `master_8bit()` (mirroring the kernel
+driver's `bf_master_8bit()`) and passes it through
+`tuxmix_usb::protocol::set_output_master`, which writes both the
+8-bit companion and the 16-bit register on both L/R — no longer a
+constant 0xF3.
 
 ## Hardware output-level switch (+19 dBu / +4 dBu) — NOT in the protocol
 

@@ -236,7 +236,7 @@ user; the bases below follow the strip order left → right:**
 | AS1/2   | 0x09C | AN1 ✓ |
 | ADAT3/4 | 0x0D0 | AN1 ✓ |
 | ADAT5/6 | 0x104 | AN1 ✓ |
-| ADAT7/8 | 0x138 | predicted (stride) |
+| ADAT7/8 | 0x138 | confirmed (cross-checked 2026-08-28 against the kernel driver's independently hardware-verified `BF_REG_CROSS_BASE_L + BF_REG_CROSS_STRIDE·bf_xpoint_block[5]` = 0x0034 + 0x0034·5 = 0x138) |
 
 (R bases = L + 0x1A.)
 
@@ -405,9 +405,21 @@ bReq=0x12  wValue=<16-bit vol>  wIndex=0x03E0 + 2*out (L) / 0x03E1 + 2*out (R)
 | AN1/2   | 0x03E0/0x03E1 | 0x0004/0x0005 | ✓ cap_gain_solo |
 | PH3/4   | 0x03E2/0x03E3 | 0x0006/0x0007 | ✓ cap_topo_cal |
 | AS1/2   | 0x03E4/0x03E5 | 0x0008/0x0009 | ✓ cap_as_test |
-| ADAT3/4 | 0x03E6/0x03E7 | 0x000A/0x000B | predicted (stride) |
-| ADAT5/6 | 0x03E8/0x03E9 | 0x000C/0x000D | predicted (stride) |
-| ADAT7/8 | 0x03EA/0x03EB | 0x000E/0x000F | predicted (stride) |
+| ADAT3/4 | 0x03E6/0x03E7 | 0x000A/0x000B | confirmed (cross-checked 2026-08-28, see below) |
+| ADAT5/6 | 0x03E8/0x03E9 | 0x000C/0x000D | confirmed (cross-checked 2026-08-28, see below) |
+| ADAT7/8 | 0x03EA/0x03EB | 0x000E/0x000F | confirmed (cross-checked 2026-08-28, see below) |
+
+The three ADAT rows were originally "predicted (stride)" — extrapolated
+from the confirmed AN1/2 - AS1/2 rows, never independently captured.
+Cross-checked 2026-08-28 against the kernel driver's own addressing
+(`BF_REG_MASTER_16` = 0x03E0 + 2·out, `BF_REG_MASTER_8` = 0x0004 +
+2·out — hardware-verified 2026-08-24 per `mixer.c`, and re-confirmed
+live via `tuxmix-core`'s ALSA backend read/write round-trip on
+ADAT5/6 and ADAT7/8 the same day): out=3/4/5 land exactly on the
+predicted values above. Upgraded from predicted to confirmed on that
+basis — no new USB capture was taken, the confirmation is via the
+independently-implemented and hardware-verified kernel driver, not a
+second protocol-level capture.
 
 - The 16-bit values run through the same scale as the crosspoint faders
   (the drag passed 0x0317 = -40 dB mid-ramp).
