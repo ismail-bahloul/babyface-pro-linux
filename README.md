@@ -83,7 +83,8 @@ The full reference is in this repo:
 2. Follow-ups: clock source, input trim, ref-level, phase, stereo
    split, the EQ HF-warping / shared-c4 details
 3. The user-space mixer application lives in the sibling repo
-   **TuxMix** (control stack + GUI/TUI).
+   **[TuxMix](https://github.com/ismail-bahloul/TuxMix)** (control
+   stack + GUI/TUI).
 
 ## License
 
