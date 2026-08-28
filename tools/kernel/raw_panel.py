@@ -9,7 +9,7 @@ Usage: raw_panel.py [bus/dev]      (default 003/002)
 """
 import sys, time, os, fcntl, struct
 
-DEV = sys.argv[1] if len(sys.argv) > 1 else "003/002"
+DEV = sys.argv[1] if len(sys.argv) > 1 else "003/004"
 path = f"/dev/bus/usb/{DEV}"
 fd = os.open(path, os.O_RDWR)
 

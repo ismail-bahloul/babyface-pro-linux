@@ -506,13 +506,11 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 	/* The udev alsactl restore (~100 ms after probe) clobbers the host
 	 * SELECT with a stale stored value (the control is VOLATILE but
 	 * this alsactl stores/restores it anyway) — re-assert the device's
-	 * power-on state (nothing selected, cycle disarmed) for the first
+	 * power-on state (nothing selected, cycle ARMED) for the first
 	 * ~3 s so the boot always starts in sync.
 	 */
-	if (time_is_before_jiffies(chip->panel_start + 3 * HZ)) {
+	if (time_is_after_jiffies(chip->panel_start + 3 * HZ))
 		chip->panel_select = 3;
-		chip->panel_select_armed = false;
-	}
 
 	/* Button flash (byte3 over the 0x40 idle base). */
 	btn = bf_panel_button_decode(st[3]);
