@@ -71,9 +71,16 @@ F:	sound/usb/babyfacepro.h
    are usually single-file or two-file.
 2. **`request_firmware`?** No — the device needs no firmware upload;
    the cold init is a fixed vendor-request burst (documented).
-3. **Suspend/resume + autosuspend**: S3 verified; USB autosuspend of
-   the device not yet tested (the panel poll + keepalive need to be
-   paused).
+3. **Suspend/resume + autosuspend**: S3 verified. USB autosuspend was
+   untested and nothing paused the panel poll/keepalive for it, so
+   DONE 2026-08-28: explicitly disabled with `usb_disable_autosuspend()`
+   at probe (balanced with `usb_enable_autosuspend()` at disconnect) —
+   live-tested, `power/control` reads back `on`, clean dmesg. This is
+   the safe interim: full autosuspend support (pausing the panel poll/
+   keepalive and pairing `usb_autopm_get/put_interface` around the
+   stream) is a deliberate follow-up, not implemented/tested this
+   round — say so explicitly in the cover letter rather than shipping
+   an untested code path.
 4. ~~**The panel poll** runs at 50 Hz continuously (vendor reads).  If~~
    ~~reviewers object to always-on polling, gate it on the card having a~~
    ~~control file open or make the interval a module param.~~

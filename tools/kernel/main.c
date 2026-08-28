@@ -107,6 +107,16 @@ static int babyface_probe(struct usb_interface *intf,
 	chip->card = card;
 
 	chip->dev = usb_get_dev(dev);
+	/* USB autosuspend is untested: babyface_suspend()/_resume() don't
+	 * check PMSG_IS_AUTO, and nothing in this driver holds a PM
+	 * reference while streaming or while the panel poll/keepalive
+	 * timers are running, so an autosuspend request could race a
+	 * live stream or panel tick. Disable it explicitly rather than
+	 * ship an untested code path — full autosuspend support (correct
+	 * autopm_get/put pairing around the stream and the panel/keepalive
+	 * work) is a deliberate follow-up, not an oversight.
+	 */
+	usb_disable_autosuspend(chip->dev);
 	chip->iface = intf;
 	chip->nurbs = nurbs;
 	chip->frames_per_urb = frames_per_urb;
@@ -302,6 +312,12 @@ static void babyface_disconnect(struct usb_interface *intf)
 	chip->shutdown = true;
 	cancel_work_sync(&chip->stream_work);
 	babyface_panel_stop(chip);
+	/* Balance the probe()-time usb_disable_autosuspend(): the usb_device
+	 * outlives this interface claim (a usbfs detach re-probes without
+	 * the physical device ever disconnecting), so leaving autosuspend
+	 * disabled here would wrongly affect whatever claims the device next.
+	 */
+	usb_enable_autosuspend(chip->dev);
 	/* Wake apps blocked in read/write: the card is going away. */
 	dev_info(&chip->dev->dev, "disconnect: stopping PCM substreams\n");
 	babyface_pcm_stop_both(chip, SNDRV_PCM_STATE_DISCONNECTED);
