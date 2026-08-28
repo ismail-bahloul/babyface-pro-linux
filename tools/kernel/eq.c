@@ -420,7 +420,22 @@ static int bf_eq_get(struct snd_kcontrol *kctl,
 		break;
 
 	}
-	ucontrol->value.integer.value[0] = v ? *v : 0;
+	if (param == 14) {
+		/* Inverse of put's index->dB map: slope_db stores the raw
+		 * 6/12/18/24 dB/oct value, but an ENUMERATED control's .get
+		 * must return the enum item index (0-3), same as .put
+		 * receives — returning the raw dB value here (the bug this
+		 * replaces) fed back an out-of-range index to every ALSA
+		 * consumer (confirmed via amixer: writing index 1 read back
+		 * as value 12, not 1).
+		 */
+		s32 slope = v ? *v : 6;
+
+		ucontrol->value.integer.value[0] =
+			slope >= 24 ? 3 : slope >= 18 ? 2 : slope >= 12 ? 1 : 0;
+	} else {
+		ucontrol->value.integer.value[0] = v ? *v : 0;
+	}
 	return 0;
 }
 
