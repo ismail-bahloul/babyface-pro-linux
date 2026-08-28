@@ -55,7 +55,7 @@ obj-$(CONFIG_SND_USB_BABYFACE_PRO) += snd-usb-babyface-pro.o
 
 ```text
 RME BABYFACE PRO FS DRIVER (PROPRIETARY MODE)
-M:	Ismaïl Bahloul <iswadlillah@gmail.com>
+M:	Ismaïl Bahloul <i.bahloul01@gmail.com>
 L:	alsa-devel@alsa-project.org (moderated for non-subscribers)
 S:	Maintained
 F:	sound/usb/babyfacepro.c

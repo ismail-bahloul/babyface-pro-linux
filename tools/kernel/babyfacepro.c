@@ -1445,6 +1445,6 @@ static void __exit babyface_exit(void)
 module_init(babyface_init);
 module_exit(babyface_exit);
 
-MODULE_AUTHOR("Ismaïl Bahloul <iswadlillah@gmail.com>");
+MODULE_AUTHOR("Ismaïl Bahloul <i.bahloul01@gmail.com>");
 MODULE_DESCRIPTION("RME Babyface Pro FS (proprietary mode) USB audio driver");
 MODULE_LICENSE("GPL");
