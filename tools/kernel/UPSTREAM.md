@@ -31,21 +31,20 @@ and the driver is standalone, modeled on `snd-usb-caiaq`.
 
 ## Files (as submitted, all checkpatch-clean)
 
-- `main.c` — card lifecycle, PM, module entry
-- `protocol.c` — vendor requests, cold init, rate/alt table
-- `pcm.c` — interrupt-URB streaming, hw_params, trigger, pointer
-- `mixer.c` — ALSA controls (masters, preamp, gains, crosspoints,
-  flags, pitch, loopback…)
-- `panel.c` — front-panel readback poll + controls
-- `state.c` — mixer-state persistence across re-probes/resume
-- `snd-usb-babyface-pro.h` — shared state + register map
+- `babyfacepro.c` — core driver: vendor requests + cold init,
+  interrupt-URB PCM streaming, mixer-state persistence across
+  re-probes/resume, card lifecycle (probe/disconnect/PM/module entry)
+- `babyfacepro-ctl.c` — ALSA control surface: mixer (masters, preamp,
+  gains, crosspoints, flags, pitch, loopback…), front-panel readback
+  poll + controls, hardware DSP EQ
+- `babyfacepro.h` — shared state + register map
 
 ## Integration diff (kernel tree)
 
 `sound/usb/Makefile`:
 
 ```make
-snd-usb-babyface-pro-objs := main.o protocol.o pcm.o mixer.o state.o panel.o
+snd-usb-babyface-pro-objs := babyfacepro.o babyfacepro-ctl.o
 obj-$(CONFIG_SND_USB_BABYFACE_PRO) += snd-usb-babyface-pro.o
 ```
 
@@ -60,15 +59,23 @@ M:	Ismaïl Bahloul <iswadlillah@gmail.com>
 L:	alsa-devel@alsa-project.org (moderated for non-subscribers)
 S:	Maintained
 F:	sound/usb/babyfacepro.c
+F:	sound/usb/babyfacepro-ctl.c
 F:	sound/usb/babyfacepro.h
 ```
 
 ## Before sending (reviewer will ask)
 
-1. **Squash to a small patch series** (probe/stream, controls, panel,
-   state persistence) with one driver per `sound/usb/babyfacepro.c` —
-   the split into 6 files is for development; upstream sound drivers
-   are usually single-file or two-file.
+1. ~~**Squash to a small patch series** (probe/stream, controls, panel,~~
+   ~~state persistence) with one driver per `sound/usb/babyfacepro.c` —~~
+   ~~the split into 6 files is for development; upstream sound drivers~~
+   ~~are usually single-file or two-file.~~ DONE 2026-08-28: squashed to
+   two files — `babyfacepro.c` (core: protocol/pcm/state/lifecycle) +
+   `babyfacepro-ctl.c` (ALSA controls: mixer/panel/eq) — build,
+   `sparse`/`W=1`/`checkpatch` clean, live-tested on the physical unit.
+   Still needs turning into an actual patch *series* (probe/stream,
+   controls, panel, state persistence as separate commits) before
+   `git send-email` — the two-file squash is the target layout, not
+   yet the target commit structure.
 2. **`request_firmware`?** No — the device needs no firmware upload;
    the cold init is a fixed vendor-request burst (documented).
 3. **Suspend/resume + autosuspend**: S3 verified. USB autosuspend was

@@ -36,8 +36,7 @@ fi
 echo "== checkpatch =="
 KP="$KSRC/scripts/checkpatch.pl"
 if [ -x "$KP" ]; then
-	for f in main.c protocol.c pcm.c mixer.c state.c panel.c eq.c \
-		 snd-usb-babyface-pro.h; do
+	for f in babyfacepro.c babyfacepro-ctl.c babyfacepro.h; do
 		if $KP --no-tree --strict -f "$f" 2>&1 | grep -qE 'ERROR|WARNING'; then
 			echo "  WARN  $f (see checkpatch below)"
 			$KP --no-tree --strict -f "$f" 2>&1 | grep -E 'ERROR|WARNING'

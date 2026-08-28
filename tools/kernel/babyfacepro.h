@@ -115,10 +115,10 @@
 #define BF_REG_KEEPALIVE_SETTINGS	0x05cf
 #define BF_REG_KEEPALIVE_INIT		0x05ff
 
-/* Front-panel readback (panel.c): 0x17 read at wIdx 0x0000 — the index
+/* Front-panel readback (babyfacepro-ctl.c): 0x17 read at wIdx 0x0000 — the index
  * the Windows driver polls (cap_buttons2.pcap).  byte0 = preamp 48V/PAD,
  * byte1 = OUT sel + DIM/MIX bits, byte2 = IN sel + wheel counter,
- * byte3 = button flash (see panel.c for the full layout).
+ * byte3 = button flash (see babyfacepro-ctl.c for the full layout).
  */
 #define BF_REG_PANEL_READ		0x0000
 #define BF_PANEL_IN_SHIFT		4
@@ -126,7 +126,7 @@
 #define BF_PANEL_IN_CH34		0x05
 #define BF_PANEL_IN_OPT			0x06
 /* OUT selection — the gain-display-mode encoding (cap_dim.pcap);
- * panel.c also accepts the base-mode 0x01/0x02 (cap_buttons.pcap).
+ * babyfacepro-ctl.c also accepts the base-mode 0x01/0x02 (cap_buttons.pcap).
  */
 #define BF_PANEL_OUT_CH12		0x04
 #define BF_PANEL_OUT_PHONES		0x05
@@ -200,7 +200,7 @@ struct bf_source {
 	u8 idx_r;
 };
 
-/* Crosspoint-source order + register block maps (mixer.c). */
+/* Crosspoint-source order + register block maps (babyfacepro-ctl.c). */
 extern const struct bf_source bf_sources[14];
 extern const u8 bf_xpoint_block[6];
 
@@ -258,7 +258,7 @@ struct snd_usb_babyface {
 	int width;			/* width knob -100..+100 */
 	u16 fx_send;			/* FX send level 0..0x1000 */
 
-	/* DSP EQ (eq.c) — 4 analog-input strips, params kept in state */
+	/* DSP EQ (babyfacepro-ctl.c) — 4 analog-input strips, params kept in state */
 	struct bf_eq_channel {
 		bool on;		/* EQ engaged (else identity blocks) */
 		s32 slope_db;		/* low-cut slope 6/12/18/24 (0 = off) */
@@ -273,7 +273,7 @@ struct snd_usb_babyface {
 		s32 shared;		/* cached c4 (shared by the slots) */
 	} eq[4];
 
-	/* front panel (panel.c) — 0x17 readback poll */
+	/* front panel (babyfacepro-ctl.c) — 0x17 readback poll */
 	struct delayed_work panel_work;
 	unsigned int panel_poll_ms;	/* front-panel poll interval, module param */
 	u8 panel_prev[4];		/* last 0x17 snapshot */
@@ -335,14 +335,14 @@ struct bf_rate {
 	unsigned int min_fpu;	/* frames/URB floor = one alt packet (448/640/1024 B) */
 };
 
-/* Sample-rate / alt classes (protocol.c). */
+/* Sample-rate / alt classes (babyfacepro.c). */
 const struct bf_rate *bf_rate_lookup(unsigned int rate);
 
 /* ── shared driver state ─────────────────────────────────────── */
 extern const u16 bf_flag_cycle[4];
 extern const struct bf_source bf_sources[14];
 
-/* eq.c — the DSP EQ (struct snd_usb_babyface is defined above). */
+/* babyfacepro-ctl.c — the DSP EQ (struct snd_usb_babyface is defined above). */
 void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 		      s32 gain_x10, s32 fs);
 void bf_eq_reupload(struct snd_usb_babyface *chip);
@@ -350,21 +350,19 @@ int babyface_create_eq(struct snd_usb_babyface *chip);
 extern const u8 bf_xpoint_block[6];
 extern const struct snd_pcm_hw_constraint_list bf_rates_constraint;
 
-/* ── protocol.c ──────────────────────────────────────────────── */
+/* ── babyfacepro.c ──────────────────────────────────────────────── */
 int bf_vendor_write(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx);
 int bf_vendor_read(struct snd_usb_babyface *chip, u8 req, u16 idx, u8 *buf);
 int bf_cold_init(struct snd_usb_babyface *chip);
 int bf_crosspoint_clear_cross(struct snd_usb_babyface *chip,
 			      unsigned int blk);
 const struct bf_rate *bf_rate_lookup(unsigned int rate);
-
-/* ── pcm.c ───────────────────────────────────────────────────── */
 void babyface_stream_kill(struct snd_usb_babyface *chip);
 void babyface_pcm_stop_both(struct snd_usb_babyface *chip, snd_pcm_state_t state);
 void babyface_stream_work(struct work_struct *work);
 extern const struct snd_pcm_ops babyface_pcm_ops;
 
-/* ── mixer.c ─────────────────────────────────────────────────── */
+/* ── babyfacepro-ctl.c ─────────────────────────────────────────────────── */
 int babyface_write_default_mixer(struct snd_usb_babyface *chip);
 int bf_apply_masters(struct snd_usb_babyface *chip);
 int bf_loopback_write_map(struct snd_usb_babyface *chip, int out, bool on);
@@ -380,13 +378,13 @@ u8 bf_master_8bit(u16 vol16);		/* 16-bit master → 8-bit companion */
 int bf_gain_max_db(int mic);
 int bf_gain_db(int mic, u8 raw);	u8 bf_gain_raw(int mic, int db);
 
-/* ── panel.c ─────────────────────────────────────────────────── */
+/* ── babyfacepro-ctl.c ─────────────────────────────────────────────────── */
 int babyface_create_panel(struct snd_usb_babyface *chip);
 void babyface_panel_start(struct snd_usb_babyface *chip);
 void babyface_panel_stop(struct snd_usb_babyface *chip);
 void babyface_panel_work(struct work_struct *work);
 
-/* ── state.c ─────────────────────────────────────────────────── */
+/* ── babyfacepro.c ─────────────────────────────────────────────────── */
 void bf_state_save(struct snd_usb_babyface *chip);
 int bf_state_restore(struct snd_usb_babyface *chip);
 void bf_state_purge(void);

@@ -57,7 +57,7 @@ libasound_module_pcm_tuxmix.so  ← PipeWire via spa-alsa (sink/source)
 | Controls: 84 crosspoints (6 out × 14 src) — output order corrected | ✅ (Phones = block 0) |
 | Controls: pitch, loopback ×6, AN1>2, link, width, FX send, MS | ✅ |
 | Loopback record staging | ✅ NO STAGING NEEDED (2026-08-26): the record is 1:1 with the master on Windows (aligned captures) AND Linux (live, S16 tone: −20 dBFS → −20.0).  The “fixed 2^-5 tap”/×32 were artifacts of mktone.py's broken 4-byte tone (chain ran −48 dB low → record quantizer → coarse square).  ×32 REVERTED; mktone.py → S16 |
-| Front-panel readback (0x17 poll at 50 Hz → read-only button/wheel/IN/OUT/MIX/DIM ALSA controls, panel.c) | ✅ hardware-validated 2026-08-26 (all six flash codes + wheel; consume-on-get bug fixed — controls hold the last state) |
+| Front-panel readback (0x17 poll at 50 Hz → read-only button/wheel/IN/OUT/MIX/DIM ALSA controls, babyfacepro-ctl.c) | ✅ hardware-validated 2026-08-26 (all six flash codes + wheel; consume-on-get bug fixed — controls hold the last state) |
 | Multi-channel PCM (2-12 ch, full 14-word frame) | ✅ (12-ch capture + playback verified; marker words skipped) |
 | Default mixer state at probe (TotalMix-style: all sources → all outputs at unity, masters 0 dB) | ✅ |
 | DSP EQ (eq.c): 4 strips × 3-band bell/shelf + low cut, 64-byte bulk coeff blocks on ep 0x0A | ✅ HARDWARE-VALIDATED 2026-08-27 on the mic (bell ±6 dB @ 200 Hz, +6 dB @ 3 kHz, low cut 100/300 Hz on/off; `eq_selftest` ~1 LSB vs the captures). Fixed-point Q27 (CORDIC + exp2, no FPU). NOTE: the loopback taps the record bus POST-EQ, so the input EQ is not measurable on the loopback chain (ear-validated instead) |
@@ -202,6 +202,30 @@ first-impulse method.)  Full sweep `tools/kernel/latency-sweep.sh`:
     from the cache — no kernel errors, full-duplex 0-xrun after.
     Only the master volume is re-owned by the system afterwards
     (alsactl/asound.state + WirePlumber — see the re-probe note).
+14. **Upstream-prep pass (2026-08-28)**: a real kernel bug found and
+    fixed — `bf_eq_get`'s Low Cut Slope case returned the raw stored
+    dB value instead of the ALSA enum index, confirmed broken via raw
+    `amixer cget`/`sset` independent of any userspace code, now fixed
+    and re-verified live. `panel.c`'s boot-window SELECT re-assert had
+    an inverted `time_is_before_jiffies`/`time_is_after_jiffies` check
+    (re-asserted the power-on state *after* the 3 s window instead of
+    during it). `sparse` (C=1/C=2) run for the first time: 8 real
+    warnings (missing `static` on two file-local arrays, `int` vs
+    `snd_pcm_state_t` on `babyface_pcm_stop_both`, two frame pointers
+    that should have been `__le32*` not `u32*`) — all fixed, `sparse`
+    and `W=1` now both clean. USB autosuspend (previously untested,
+    nothing paused the panel poll/keepalive for it) explicitly
+    disabled via `usb_disable_autosuspend()`/`usb_enable_autosuspend()`
+    rather than left as a live untested path; the front-panel poll
+    interval is now a module param (`panel_poll_ms`, 10–1000 ms,
+    default unchanged) instead of hardcoded. **Six-file → two-file
+    squash**: `main.c`/`protocol.c`/`pcm.c`/`state.c` merged into
+    `babyfacepro.c` (core driver); `mixer.c`/`panel.c`/`eq.c` merged
+    into `babyfacepro-ctl.c` (ALSA control surface);
+    `snd-usb-babyface-pro.h` renamed `babyfacepro.h` — matching the
+    upstream target layout in `UPSTREAM.md`. All of the above build +
+    `sparse`/`W=1`/`checkpatch` clean and were live-tested (module
+    reload, `amixer`, `dmesg`) on the physical unit.
 
 ## Re-probe resilience: the usbfs claim (2026-08-24, diagnosed)
 
@@ -464,7 +488,7 @@ frames_per_urb, so the module param must match.
 | Stream init/trigger/arm (`streaming_init`, `0x10 0x8000`+`0x1D`, `0x14 0xC000`; never `0x13` mid-run) | probe init + trigger-time stream start (workqueue) |
 | 48V/PAD state (0x17 wIdx 0x003F + 0x21 commit) | boolean controls (works with no stream — verified) |
 | Sample rate = SET_INTERFACE(5, alt) | hw_params → set_interface + stream restart |
-| Front panel (0x17 readback, host-driven) | read-only ALSA controls — DONE 2026-08-26 (panel.c); the translation to mixer writes is TuxMix user-space |
+| Front panel (0x17 readback, host-driven) | read-only ALSA controls — DONE 2026-08-26 (babyfacepro-ctl.c); the translation to mixer writes is TuxMix user-space |
 | Loopback/MS-proc/AN1>2/width/split flags | boolean/route controls — TBD |
 | EQ = bulk OUT ep 0x0A coefficient uploads | BYTES controls + bulk URBs — TBD |
 | Reverb/echo = host-side | out of scope for the kernel (TuxMix user-space) |
