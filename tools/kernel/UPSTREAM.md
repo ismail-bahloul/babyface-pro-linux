@@ -74,9 +74,15 @@ F:	sound/usb/babyfacepro.h
 3. **Suspend/resume + autosuspend**: S3 verified; USB autosuspend of
    the device not yet tested (the panel poll + keepalive need to be
    paused).
-4. **The panel poll** runs at 50 Hz continuously (vendor reads).  If
-   reviewers object to always-on polling, gate it on the card having a
-   control file open or make the interval a module param.
+4. ~~**The panel poll** runs at 50 Hz continuously (vendor reads).  If~~
+   ~~reviewers object to always-on polling, gate it on the card having a~~
+   ~~control file open or make the interval a module param.~~
+   DONE 2026-08-28: `panel_poll_ms` module param (10-1000 ms, 20 =
+   default/unchanged), live-tested (loaded at 50 ms, panel controls
+   still read correctly, no dmesg errors). Still always-on regardless
+   of whether a control file is open — only the interval is tunable,
+   not gated on usage — flag this if a reviewer wants the stronger
+   fix.
 5. **Open protocol items** (documented in PROTOCOL.md, not blockers):
    the preamp readback byte0 index semantics (0x003F vs 0x0000), the
    width strip-ownership tail (cap_width7 family), the ref-level

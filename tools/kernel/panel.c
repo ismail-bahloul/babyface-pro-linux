@@ -33,9 +33,6 @@
 
 #include "snd-usb-babyface-pro.h"
 
-/* Windows polls the 5-register status set at ~50 cycles/s; match that. */
-#define BF_PANEL_POLL_MS		20
-
 /* Control indices in chip->panel_kctl[] (for snd_ctl_notify). */
 enum {
 	BF_PANEL_KCTL_BUTTON,
@@ -708,7 +705,7 @@ void babyface_panel_work(struct work_struct *work)
 		return;
 	bf_panel_tick(chip);
 	schedule_delayed_work(&chip->panel_work,
-			      msecs_to_jiffies(BF_PANEL_POLL_MS));
+			      msecs_to_jiffies(chip->panel_poll_ms));
 }
 
 void babyface_panel_start(struct snd_usb_babyface *chip)

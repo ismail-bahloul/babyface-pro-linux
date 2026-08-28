@@ -68,6 +68,13 @@
 #define BF_FRAMES_PER_URB_DEFAULT	256
 #define BF_NURBS_DEFAULT		8
 
+/* Front-panel poll interval default — Windows polls the 5-register
+ * status set at ~50 cycles/s (20 ms); match that.  Tunable via the
+ * panel_poll_ms module param for reviewers/distros who want a slower
+ * (or faster) rate than the Windows-matching default.
+ */
+#define BF_PANEL_POLL_MS_DEFAULT	20
+
 #define BF_WORDS_PER_FRAME		14	/* 14 × 32-bit words per frame */
 
 /* Consecutive URB errors (CRC/babble/protocol or a failed resubmit)
@@ -268,6 +275,7 @@ struct snd_usb_babyface {
 
 	/* front panel (panel.c) — 0x17 readback poll */
 	struct delayed_work panel_work;
+	unsigned int panel_poll_ms;	/* front-panel poll interval, module param */
 	u8 panel_prev[4];		/* last 0x17 snapshot */
 	bool panel_seen;		/* first snapshot taken */
 	bool panel_select_armed;	/* device SELECT cycle armed (IN switch disarms) */

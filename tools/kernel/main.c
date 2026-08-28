@@ -21,6 +21,7 @@ static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
 static int frames_per_urb = BF_FRAMES_PER_URB_DEFAULT;
 static int nurbs = BF_NURBS_DEFAULT;
+static int panel_poll_ms = BF_PANEL_POLL_MS_DEFAULT;
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for the Babyface Pro FS sound card.");
@@ -30,6 +31,8 @@ module_param(frames_per_urb, int, 0644);
 MODULE_PARM_DESC(frames_per_urb, "Audio frames per URB, 8..1024 (16 = low-latency floor, 256 = default).");
 module_param(nurbs, int, 0644);
 MODULE_PARM_DESC(nurbs, "URBs in flight per direction, 1..16 (16 = low-latency).");
+module_param(panel_poll_ms, int, 0644);
+MODULE_PARM_DESC(panel_poll_ms, "Front-panel poll interval in ms, 10..1000 (20 = default, matches Windows' ~50 Hz).");
 
 /* ── USB driver ────────────────────────────────────────────── */
 
@@ -92,6 +95,7 @@ static int babyface_probe(struct usb_interface *intf,
 
 	frames_per_urb = clamp(frames_per_urb, 8, 1024) & ~7;
 	nurbs = clamp(nurbs, 1, 16);
+	panel_poll_ms = clamp(panel_poll_ms, 10, 1000);
 
 	err = snd_card_new(&intf->dev, index[0], id[0], THIS_MODULE,
 			   sizeof(*chip), &card);
@@ -106,6 +110,7 @@ static int babyface_probe(struct usb_interface *intf,
 	chip->iface = intf;
 	chip->nurbs = nurbs;
 	chip->frames_per_urb = frames_per_urb;
+	chip->panel_poll_ms = panel_poll_ms;
 	chip->rate = 48000;
 	chip->alt = BF_ALT_1;
 	chip->frame_bytes = 56;
