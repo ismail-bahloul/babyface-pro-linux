@@ -126,13 +126,26 @@ below) lives at `patches/0001-ALSA-usb-add-RME-Babyface-Pro-FS-driver-proprietar
    just isn't exposed as a control.)
 6. **Device naming**: the module/card name is `Babyface Pro FS`
    (the FS suffix matters — the non-FS unit has a different PID).
-7. **linux-next compile test + get_maintainer.pl** — DONE 2026-08-28:
-   shallow-cloned linux-next (20260828 snapshot), `make modules_prepare`
-   (not a full build — no Module.symvers, so MODPOST is symbol-unresolved
-   by design; `KBUILD_MODPOST_WARN=1` gets past that to confirm the .ko
-   still links). Compiled clean against today's headers, zero source
-   changes needed. Also ran linux-next's own (newer) `checkpatch.pl
-   --strict`, which surfaced 34 CHECK-level style nits `selftests.sh`
+7. **linux-next compile test + get_maintainer.pl** — DONE 2026-08-28,
+   **RE-RUN 2026-08-29 with a full in-tree object build**: shallow-cloned
+   linux-next (20260828 snapshot), wired `sound/usb/babyfacepro/` into
+   `sound/usb/Makefile` + `Kconfig` + `MAINTAINERS`, and compiled the
+   two objects in-tree (`make sound/usb/babyfacepro/`), which the
+   2026-08-28 `make modules_prepare`+`KBUILD_MODPOST_WARN=1` run did
+   NOT do. That in-tree gcc build caught two real linkage bugs the
+   clang-only out-of-tree build had silently missed:
+   - a stray `extern const struct snd_pcm_ops babyface_pcm_ops;` left
+     in `babyfacepro.h` from the 6-file split (its only user is
+     `babyfacepro.c`, where the ops are `static`) → removed;
+   - `bf_apply_masters()` left `static` in `babyfacepro-ctl.c` though
+     `babyfacepro.c` calls it cross-file (and it's declared in the
+     header) → un-static'ed. `split_driver.py` already un-staticked it,
+     so the squash had drifted from the split.
+   After those two fixes the in-tree build is clean (no warnings even
+   with `CONFIG_WERROR=y` from the snapshot's defconfig) and the patch
+   was re-generated from linux-next. Also ran linux-next's own (newer)
+   `checkpatch.pl --strict`, which surfaced 34 CHECK-level style nits
+   `selftests.sh`
    silently misses (it only grep-filters for ERROR|WARNING, not CHECK) —
    fixed 30 of them (alignment-to-open-paren, stray blank lines, a
    chained assignment, a line ending in `(`); left 4 as deliberate

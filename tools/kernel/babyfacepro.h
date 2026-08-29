@@ -360,7 +360,6 @@ const struct bf_rate *bf_rate_lookup(unsigned int rate);
 void babyface_stream_kill(struct snd_usb_babyface *chip);
 void babyface_pcm_stop_both(struct snd_usb_babyface *chip, snd_pcm_state_t state);
 void babyface_stream_work(struct work_struct *work);
-extern const struct snd_pcm_ops babyface_pcm_ops;
 
 /* ── babyfacepro-ctl.c ─────────────────────── */
 int babyface_write_default_mixer(struct snd_usb_babyface *chip);

@@ -222,7 +222,7 @@ int babyface_write_default_mixer(struct snd_usb_babyface *chip)
  * un-mutes the 8-bit register).  Re-apply the six output masters +
  * mutes from the cache; also used by the PM restore path.
  */
-static int bf_apply_masters(struct snd_usb_babyface *chip)
+int bf_apply_masters(struct snd_usb_babyface *chip)
 {
 	int out, ret;
 	u16 flag;

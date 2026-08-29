@@ -32,7 +32,6 @@ const struct bf_rate *bf_rate_lookup(unsigned int rate);
 void babyface_stream_kill(struct snd_usb_babyface *chip);
 void babyface_pcm_stop_both(struct snd_usb_babyface *chip, int state);
 void babyface_stream_work(struct work_struct *work);
-extern const struct snd_pcm_ops babyface_pcm_ops;
 
 /* ── mixer.c ─────────────────────────────────────────────────── */
 int babyface_write_default_mixer(struct snd_usb_babyface *chip);
