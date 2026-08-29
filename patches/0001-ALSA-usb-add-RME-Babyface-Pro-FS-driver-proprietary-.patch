@@ -55,10 +55,28 @@ Validated on real hardware: full-duplex streaming across the whole
 rate x period matrix with a signal-integrity tap, start/stop stress
 (30 cycles), mixer-state restore across an interface unbind/rebind,
 and a mid-stream disconnect, all via the automated regression suite
-kept with the driver's development tree. USB autosuspend is not yet
-supported and is explicitly disabled (usb_disable_autosuspend) rather
-than left untested; sparse (C=1/C=2), W=1, and checkpatch --strict
-are all clean.
+kept with the driver's development tree. sparse (C=1/C=2), W=1, and
+checkpatch --strict are all clean.
+
+Known limitations, stated up front:
+ - USB autosuspend is not supported yet and is explicitly disabled
+   (usb_disable_autosuspend at probe, balanced at disconnect) rather
+   than shipped untested: the front-panel poll and keepalive work
+   items run continuously and nothing pairs usb_autopm_get/put around
+   the stream. S3 suspend/resume works and is tested; full autosuspend
+   (pausing the panel/keepalive work + autopm pairing) is a follow-up.
+ - A few protocol items are not fully pinned down but do not affect
+   the shipped controls (the relevant paths are hardware-verified);
+   documented as open in PROTOCOL.md: the preamp readback index
+   semantics (0x003F vs 0x0000), a width strip-ownership edge case,
+   and the exact high-frequency warping of the EQ coefficient
+   computation vs TotalMix's curve.
+ - The latency profile is selected at load time via the frames_per_urb
+   / nurbs module params (default 256 frames/URB, matching TotalMix's
+   256-sample buffer; frames_per_urb=16 nurbs=16 gives a 0.33 ms
+   monitoring-grade floor). Changing profile currently means a module
+   reload; a runtime reconfiguration (RME's Fireface USB Settings-style
+   switch) is a post-merge follow-up.
 
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---

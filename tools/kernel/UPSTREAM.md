@@ -120,8 +120,10 @@ below) lives at `patches/0001-ALSA-usb-add-RME-Babyface-Pro-FS-driver-proprietar
    fix.
 5. **Open protocol items** (documented in PROTOCOL.md, not blockers):
    the preamp readback byte0 index semantics (0x003F vs 0x0000), the
-   width strip-ownership tail (cap_width7 family), the ref-level
-   3-state map, the EQ HF warp.
+   width strip-ownership tail (cap_width7 family), and the EQ HF warp.
+   (The ref-level 3-state map was FULLY DECODED 2026-08-26 — see
+   LINUX-VALIDATION.md — and the driver forces the +4dBu default; it
+   just isn't exposed as a control.)
 6. **Device naming**: the module/card name is `Babyface Pro FS`
    (the FS suffix matters — the non-FS unit has a different PID).
 7. **linux-next compile test + get_maintainer.pl** — DONE 2026-08-28:
@@ -148,6 +150,13 @@ below) lives at `patches/0001-ALSA-usb-add-RME-Babyface-Pro-FS-driver-proprietar
    Jaroslav Kysela <perex@perex.cz>, Takashi Iwai <tiwai@suse.com>,
    linux-sound@vger.kernel.org, linux-kernel@vger.kernel.org. Re-run
    before actually mailing — MAINTAINERS entries can change.
+
+## Cover letter
+
+The mailing cover letter (0/N email, separate from the 1/N patch) is
+`patches/COVER-LETTER.md` — includes the known-limitations block
+(autosuspend, open protocol items, load-time latency profile) that the
+`Before sending` items below ask to state explicitly.
 
 ## Follow-ups (post-merge)
 
