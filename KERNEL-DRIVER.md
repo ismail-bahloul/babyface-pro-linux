@@ -224,8 +224,28 @@ first-impulse method.)  Full sweep `tools/kernel/latency-sweep.sh`:
     into `babyfacepro-ctl.c` (ALSA control surface);
     `snd-usb-babyface-pro.h` renamed `babyfacepro.h` — matching the
     upstream target layout in `UPSTREAM.md`. All of the above build +
-    `sparse`/`W=1`/`checkpatch` clean and were live-tested (module
+    build + `sparse`/`W=1`/`checkpatch` clean and were live-tested (module
     reload, `amixer`, `dmesg`) on the physical unit.
+15. **Runtime buffer reconfiguration** (roadmap — NOT yet implemented):
+    switch the latency profile **on the fly** (e.g. 256-sample default
+    ↔ 16-frame low-latency floor) without unloading/reloading the
+    module, the way the Windows Fireface USB Settings panel changes the
+    buffer size while the device is running.  Today `frames_per_urb` /
+    `nurbs` are module params read **once in `probe()`** — the URB pool
+    is sized from them at probe and is never reallocated, so changing a
+    sysfs param at runtime does nothing to a live stream (only the next
+    probe sees it); switching profiles currently means `rmmod`/`insmod`
+    (or unbind/rebind), which cuts audio and re-runs the mixer-state
+    restore.  To close this gap: expose a reconfiguration entry point
+    (card sysfs attribute or ALSA control) that tears down and rebuilds
+    the URB pool (`usb_kill_urb`/`usb_free_urb` → realloc at the new
+    `frames_per_urb`/`nurbs`), re-applies the `PERIOD_SIZE ≥
+    frames_per_urb` constraint on the open substream (watch out: a
+    stream already running at period 16 would violate a *larger*
+    `frames_per_urb` — the constraint must be re-negotiated), and stops/
+    resumes any active stream cleanly (XRUN or suspend, not a full card
+    reset).  Deliberately a **post-merge follow-up**, not an RFC
+    blocker — it touches the streaming core right before submission.
 
 ## Re-probe resilience: the usbfs claim (2026-08-24, diagnosed)
 

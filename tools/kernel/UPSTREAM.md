@@ -149,6 +149,17 @@ below) lives at `patches/0001-ALSA-usb-add-RME-Babyface-Pro-FS-driver-proprietar
    linux-sound@vger.kernel.org, linux-kernel@vger.kernel.org. Re-run
    before actually mailing — MAINTAINERS entries can change.
 
+## Follow-ups (post-merge)
+
+- **Dynamic buffer reconfiguration**: switch the latency profile (e.g.
+  256-sample default ↔ 16-frame low-latency floor) **at runtime** like
+  the Windows Fireface USB Settings panel, instead of the current
+  load-time-only module params (`frames_per_urb`/`nurbs`, read once in
+  `probe()`; today switching means a reload/rebind).  See
+  `KERNEL-DRIVER.md` Known-gaps item 15 for the design sketch. Kept
+  out of the RFC on purpose: it touches the streaming core and is not a
+  submission blocker.
+
 ## Build / test commands
 
 ```sh
