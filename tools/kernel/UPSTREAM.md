@@ -31,6 +31,16 @@ and the driver is standalone, modeled on `snd-usb-caiaq`.
 
 ## Files (as submitted, all checkpatch-clean)
 
+Live under `sound/usb/babyfacepro/` (a subdirectory, NOT flat files
+directly in `sound/usb/` — corrected 2026-08-28 after actually
+building the integration: this matches the snd-usb-caiaq convention,
+and every other vendor-specific USB sound driver in current
+linux-next is a subdirectory too, e.g. `6fire/`, `bcd2000/`, `caiaq/`,
+`hiface/`, `line6/`. `babyfacepro.c` calls 8 functions defined in
+`babyfacepro-ctl.c` directly from `probe()`, so the two files can
+only ever be built/linked together — this also killed any hope of a
+clean file-boundary patch split, see item 1 below).
+
 - `babyfacepro.c` — core driver: vendor requests + cold init,
   interrupt-URB PCM streaming, mixer-state persistence across
   re-probes/resume, card lifecycle (probe/disconnect/PM/module entry)
@@ -38,44 +48,55 @@ and the driver is standalone, modeled on `snd-usb-caiaq`.
   gains, crosspoints, flags, pitch, loopback…), front-panel readback
   poll + controls, hardware DSP EQ
 - `babyfacepro.h` — shared state + register map
+- `Makefile` — `snd-usb-babyface-pro-y := babyfacepro.o
+  babyfacepro-ctl.o` + `obj-$(CONFIG_SND_USB_BABYFACE_PRO) +=
+  snd-usb-babyface-pro.o` (copy of `sound/usb/caiaq/Makefile`'s
+  pattern)
 
 ## Integration diff (kernel tree)
 
-`sound/usb/Makefile`:
+`sound/usb/Makefile` — add `babyfacepro/` to the subdirectory list:
 
 ```make
-snd-usb-babyface-pro-objs := babyfacepro.o babyfacepro-ctl.o
-obj-$(CONFIG_SND_USB_BABYFACE_PRO) += snd-usb-babyface-pro.o
+obj-$(CONFIG_SND) += misc/ usx2y/ caiaq/ 6fire/ hiface/ bcd2000/ qcom/ babyfacepro/
 ```
 
-`sound/usb/Kconfig` — the entry in `tools/kernel/Kconfig`
+`sound/usb/Kconfig` — add before `source "sound/usb/line6/Kconfig"`
 (`config SND_USB_BABYFACE_PRO`, tristate, selects SND_PCM).
 
-`MAINTAINERS` entry (add near the other USB sound drivers):
+`MAINTAINERS` entry (added alphabetically, before `RNBD BLOCK
+DRIVERS`):
 
 ```text
 RME BABYFACE PRO FS DRIVER (PROPRIETARY MODE)
 M:	Ismaïl Bahloul <i.bahloul01@gmail.com>
 L:	alsa-devel@alsa-project.org (moderated for non-subscribers)
 S:	Maintained
-F:	sound/usb/babyfacepro.c
-F:	sound/usb/babyfacepro-ctl.c
-F:	sound/usb/babyfacepro.h
+F:	sound/usb/babyfacepro/
 ```
+
+The RFC-ready patch (`git format-patch` output of exactly this diff,
+built and verified against a real linux-next checkout — see item 7
+below) lives at `patches/0001-ALSA-usb-add-RME-Babyface-Pro-FS-driver-proprietary-.patch`.
 
 ## Before sending (reviewer will ask)
 
 1. ~~**Squash to a small patch series** (probe/stream, controls, panel,~~
    ~~state persistence) with one driver per `sound/usb/babyfacepro.c` —~~
    ~~the split into 6 files is for development; upstream sound drivers~~
-   ~~are usually single-file or two-file.~~ DONE 2026-08-28: squashed to
-   two files — `babyfacepro.c` (core: protocol/pcm/state/lifecycle) +
-   `babyfacepro-ctl.c` (ALSA controls: mixer/panel/eq) — build,
-   `sparse`/`W=1`/`checkpatch` clean, live-tested on the physical unit.
-   Still needs turning into an actual patch *series* (probe/stream,
-   controls, panel, state persistence as separate commits) before
-   `git send-email` — the two-file squash is the target layout, not
-   yet the target commit structure.
+   ~~are usually single-file or two-file.~~ DONE 2026-08-28, but as ONE
+   patch, not a series: squashed to two files — `babyfacepro.c`
+   (core: protocol/pcm/state/lifecycle) + `babyfacepro-ctl.c` (ALSA
+   controls: mixer/panel/eq) — build, `sparse`/`W=1`/`checkpatch`
+   clean, live-tested on the physical unit. A file-boundary patch
+   series (patch 1 = babyfacepro.c, patch 2 = babyfacepro-ctl.c) was
+   considered and rejected: `babyfacepro.c` calls 8 functions defined
+   in `babyfacepro-ctl.c` straight from `probe()`, so patch 1 alone
+   wouldn't link — the only way to make that bisectable would be
+   throwaway stub functions in patch 1, which is worse than one clean
+   patch. This also matches common practice for a wholesale new-driver
+   addition (nothing to bisect in code that doesn't exist yet). See
+   the RFC patch at `patches/0001-...patch`.
 2. **`request_firmware`?** No — the device needs no firmware upload;
    the cold init is a fixed vendor-request burst (documented).
 3. **Suspend/resume + autosuspend**: S3 verified. USB autosuspend was
