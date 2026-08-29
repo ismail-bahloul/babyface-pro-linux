@@ -86,6 +86,31 @@ The full reference is in this repo:
    **[TuxMix](https://github.com/ismail-bahloul/TuxMix)** (control
    stack + GUI/TUI).
 
+## Related work / landscape
+
+This driver targets the **proprietary USB mode** of the Babyface Pro FS
+(`2a39:3fc0`), which exposes the full channel count and the hardware
+DSP mixer at the lowest latency. To our knowledge this is the only
+reverse-engineered implementation of that mode on Linux. The other
+community projects approach RME control differently and don't overlap
+with it:
+
+- **[oscmix](https://github.com/huddx01/oscmix)** (fork of
+  [michaelforney/oscmix](https://github.com/michaelforney/oscmix)):
+  controls RME **Fireface** units (UCX II, UFX family, 802, ...) in
+  **class-compliant mode over MIDI SysEx**, exposed as an OSC API, with
+  GTK/Qt/web UIs. No Babyface support and no proprietary-mode work.
+- **[rme-control-cli](https://github.com/stistrup/rme-control-cli)** and
+  **[rme-control-gui](https://github.com/stistrup/rme-control-gui)**: a
+  Rust CLI and Tauri GUI that wrap the **ALSA** controls of the
+  Babyface Pro in class-compliant mode. No device-level
+  reverse-engineering (the proprietary mode is untouched).
+
+So the proprietary-mode protocol, the register maps, and the calibrated
+laws in this repo are the first published RE of that surface; the rest
+of the Linux ecosystem goes through the more limited class-compliant
+control surface.
+
 ## License
 
 GPL-2.0-only (kernel driver).
