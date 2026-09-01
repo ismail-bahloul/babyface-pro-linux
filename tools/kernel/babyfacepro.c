@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * RME Babyface Pro FS — proprietary-mode USB audio driver
+ * RME Babyface Pro FS - proprietary-mode USB audio driver
  *
  * Core driver: USB vendor requests + cold init, interrupt-URB PCM
  * streaming, mixer-state persistence across re-probes/resume, and
@@ -28,7 +28,7 @@
 /* The transaction-flag counter cycle on 16-bit writes. */
 const u16 bf_flag_cycle[4] = { 0xc000, 0x4000, 0x8000, 0x0000 };
 
-/* ── sample-rate / alt classes ──────────────────── */
+/* -- sample-rate / alt classes -------------------- */
 
 static const struct bf_rate bf_rates[] = {
 	{  32000, BF_ALT_1, 56,  8 },
@@ -63,14 +63,17 @@ const struct bf_rate *bf_rate_lookup(unsigned int rate)
 	return NULL;
 }
 
-/* ── vendor requests ─────────────────────── */
+/* -- vendor requests ----------------------- */
+
+/* Timeout for every vendor control transfer (ms). */
+#define BF_CTL_TIMEOUT		1000
 
 int bf_vendor_write(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx)
 {
 	return usb_control_msg_send(chip->dev, 0, req,
 				    USB_DIR_OUT | USB_TYPE_VENDOR |
 				    USB_RECIP_DEVICE,
-				    val, idx, NULL, 0, 1000, GFP_KERNEL);
+				    val, idx, NULL, 0, BF_CTL_TIMEOUT, GFP_KERNEL);
 }
 
 int bf_vendor_read(struct snd_usb_babyface *chip, u8 req, u16 idx, u8 *buf)
@@ -78,7 +81,20 @@ int bf_vendor_read(struct snd_usb_babyface *chip, u8 req, u16 idx, u8 *buf)
 	return usb_control_msg_recv(chip->dev, 0, req,
 				    USB_DIR_IN | USB_TYPE_VENDOR |
 				    USB_RECIP_DEVICE,
-				    0, idx, buf, 4, 1000, GFP_KERNEL);
+				    0, idx, buf, 4, BF_CTL_TIMEOUT, GFP_KERNEL);
+}
+
+/* Write with the per-transaction flag-cycle word OR'd into idx.  The
+ * device wants the flag word (0xc000/0x4000/0x8000/0x0000, rotating)
+ * set on every 0x12/0x1a write; this is the hot path for the mixer
+ * puts, so it is factored out.
+ */
+int bf_vendor_write_cycle(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx)
+{
+	u16 flag = bf_flag_cycle[chip->flag_cnt];
+
+	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
+	return bf_vendor_write(chip, req, val, idx | flag);
 }
 
 /* The cold-start session init (cap_coldplug.pcap), verbatim from the
@@ -109,7 +125,7 @@ int bf_cold_init(struct snd_usb_babyface *chip)
 	ret = bf_vendor_write(chip, BF_REQ_DDS, 0x7cff, 0xf803);
 	if (ret < 0)
 		return ret;
-	/* 0x1C status — the hardware-validated reference (protocol::
+	/* 0x1C status - the hardware-validated reference (protocol::
 	 * streaming_init) sends it as an OUT write; Windows reads it.
 	 * Both are tolerated; match the validated path.
 	 */
@@ -139,47 +155,42 @@ int bf_cold_init(struct snd_usb_babyface *chip)
 	return 0;
 }
 
-/* The 0x16 cold-init clear covers only 0x00-0x3D — the "cross"
+/* The 0x16 cold-init clear covers only 0x00-0x3D - the "cross"
  * registers of a block (L-reg odd / R-reg even of the stereo
  * sources) survive from the previous session and would sum L+R into
  * BOTH channels of the output (mono).  Zero them explicitly: 10 odd
- * L-registers (5,7,…23) + 10 even R-registers (4,6,…22).
+ * L-registers (5,7,...23) + 10 even R-registers (4,6,...22).
  */
 int bf_crosspoint_clear_cross(struct snd_usb_babyface *chip,
 			      unsigned int blk)
 {
 	int ret, k;
-	u16 flag;
 
-	for (k = 5; k < 24; k += 2) {
-		flag = bf_flag_cycle[chip->flag_cnt];
-		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000,
-				      (BF_REG_CROSS_BASE_L +
-				       BF_REG_CROSS_STRIDE * blk + k) | flag);
+	for (k = BF_CROSS_L_FIRST; k <= BF_CROSS_L_LAST; k += 2) {
+		ret = bf_vendor_write_cycle(chip, BF_REQ_CROSSPOINT, 0x0000,
+					     BF_REG_CROSS_BASE_L +
+					     BF_REG_CROSS_STRIDE * blk + k);
 		if (ret < 0)
 			return ret;
 	}
-	for (k = 4; k < 24; k += 2) {
-		flag = bf_flag_cycle[chip->flag_cnt];
-		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000,
-				      (BF_REG_CROSS_BASE_R +
-				       BF_REG_CROSS_STRIDE * blk + k) | flag);
+	for (k = BF_CROSS_R_FIRST; k <= BF_CROSS_R_LAST; k += 2) {
+		ret = bf_vendor_write_cycle(chip, BF_REQ_CROSSPOINT, 0x0000,
+					     BF_REG_CROSS_BASE_R +
+					     BF_REG_CROSS_STRIDE * blk + k);
 		if (ret < 0)
 			return ret;
 	}
 	return 0;
 }
 
-/* ── mixer-state persistence across interface re-probes ────────
+/* -- mixer-state persistence across interface re-probes --------
  * A userspace client can claim the proprietary interface via usbfs
- * (USBDEVFS_DISCONNECT_CLAIM — seen with PipeWire grabbing the
+ * (USBDEVFS_DISCONNECT_CLAIM - seen with PipeWire grabbing the
  * device when a stream targets the sink, and with the TuxMix
  * user-space daemon's libusb).  That detaches us and the card
  * disappears for the duration; on release the interface re-probes.
  * The device keeps its registers across the detach, but our cold
- * init clears them — so save the mixer state at disconnect and
+ * init clears them - so save the mixer state at disconnect and
  * restore it at the next probe.
  */
 
@@ -187,7 +198,7 @@ static LIST_HEAD(bf_saved_list);
 static DEFINE_MUTEX(bf_saved_mutex);
 
 /* Re-apply the whole cached mixer state after a resume (the device
- * lost its registers across a system suspend — TotalMix does the same
+ * lost its registers across a system suspend - TotalMix does the same
  * re-apply).  Caller holds chip->mutex.
  */
 int babyface_restore_state(struct snd_usb_babyface *chip)
@@ -218,7 +229,7 @@ int babyface_restore_state(struct snd_usb_babyface *chip)
 	if (ret < 0)
 		return ret;
 
-	/* Crosspoints (canonical out → register block). */
+	/* Crosspoints (canonical out -> register block). */
 	for (out = 0; out < 6; out++) {
 		unsigned int blk = bf_xpoint_block[out];
 
@@ -470,7 +481,7 @@ void bf_state_purge(void)
 	mutex_unlock(&bf_saved_mutex);
 }
 
-/* ── stream (interrupt URBs, caiaq-style) ──────────────── */
+/* -- stream (interrupt URBs, caiaq-style) ---------------- */
 
 static bool babyface_capture_copy(struct snd_usb_babyface *chip,
 				  struct snd_pcm_substream *subs,
@@ -495,10 +506,10 @@ static bool babyface_capture_copy(struct snd_usb_babyface *chip,
 			/* Channel map: app ch0-3 = device words 0-3 (AN1-4);
 			 * app ch4-9 = words 6-11 (ADAT/SPDIF); app ch10/11 =
 			 * words 12/13 = a FIXED-GAIN playback tap (observed
-			 * 2026-08-25: the playback echoes there at ~−27 dB,
-			 * independent of the output masters — NOT the output
+			 * 2026-08-25: the playback echoes there at ~-27 dB,
+			 * independent of the output masters - NOT the output
 			 * bus; the ADAT/SPDIF range is words 6-11 only).  The
-			 * device words 4/5 are a fixed marker, not audio —
+			 * device words 4/5 are a fixed marker, not audio -
 			 * skipped.  At 96/192 kHz the frame has fewer words;
 			 * missing ones read as zero.
 			 */
@@ -508,10 +519,10 @@ static bool babyface_capture_copy(struct snd_usb_babyface *chip,
 			s32 s = 0;
 
 			if (wi < words) {
-				/* 24-bit sample in bytes 1-3; arithmetic shift
-				 * sign-extends from bit 23.  S24_LE container.
+				/* 24-bit sample in bits 31-8 of the 32-bit word;
+				 * S32_LE with 24 msbits, so copy the word as-is.
 				 */
-				s = (s32)le32_to_cpu(w[wi]) >> 8;
+				s = (s32)le32_to_cpu(w[wi]);
 			}
 			put_unaligned_le32((u32)s, dst + i * 4);
 		}
@@ -544,27 +555,24 @@ static bool babyface_playback_copy(struct snd_usb_babyface *chip,
 	const u8 *src;
 
 	spin_lock(&chip->lock);
-	/* Clamp to what the app has actually written: the in-flight URBs
-	 * (nurbs × frames_per_urb) can exceed the app ring, and without
-	 * this the driver advances hw_ptr past appl_ptr — the ALSA core
-	 * then flags a spurious XRUN on the next app interaction even
-	 * though the app refills on schedule (seen at period 16-128 /
-	 * 96-192 kHz with nurbs=16).  The device just repeats the last
-	 * frames (stale audio) instead of corrupting the stream state.
-	 * NB: subtract the unbounded counters directly — modulo arithmetic
-	 * is ambiguous at exact buffer multiples (appl=512, hw=0 → both
-	 * wrap to 0).
+	/* Never copy frames the app has not prepared.  With several URBs in
+	 * flight the device can transiently be ahead of the app ring at low
+	 * periods, so hw_ptr may reach past appl_ptr; reading beyond appl_ptr
+	 * would trip a spurious XRUN.  The device just repeats the last
+	 * frames instead.  (Both counters are unbounded, so clamp on the
+	 * signed difference.)
 	 */
 	{
-		snd_pcm_sframes_t data =
+		snd_pcm_sframes_t avail =
 			(snd_pcm_sframes_t)(rt->control->appl_ptr -
 					    chip->hw_ptr[SNDRV_PCM_STREAM_PLAYBACK]);
-		if (data < 0)
-			data = 0;
-		if (data > (snd_pcm_sframes_t)buf_frames)
-			data = (snd_pcm_sframes_t)buf_frames;
-		if ((unsigned int)data < frames)
-			frames = (unsigned int)data;
+
+		if (avail < 0)
+			avail = 0;
+		else if (avail > (snd_pcm_sframes_t)buf_frames)
+			avail = buf_frames;
+		if ((snd_pcm_uframes_t)avail < frames)
+			frames = (unsigned int)avail;
 	}
 	pos = chip->hw_ptr[SNDRV_PCM_STREAM_PLAYBACK] % buf_frames;
 	for (f = 0; f < frames; f++) {
@@ -573,13 +581,15 @@ static bool babyface_playback_copy(struct snd_usb_babyface *chip,
 		src = rt->dma_area + frames_to_bytes(rt, pos);
 		/* App ch n feeds the device word n (PB1-6 = words 0-11);
 		 * words 12/13 stay zero.  At 96/192 kHz the frame is
-		 * shorter — the extra app channels are dropped.
+		 * shorter - the extra app channels are dropped.
 		 */
 		for (i = 0; i < chans && i < words; i++) {
 			u32 s = get_unaligned_le32(src + i * 4);
 
-			/* 24-bit sample into bytes 1-3, byte 0 = 0. */
-			w[i] = cpu_to_le32((s & 0x00ffffff) << 8);
+			/* S32_LE msbits=24: the app's 24 valid bits are already
+			 * left-justified (bits 31-8) - copy the word as-is.
+			 */
+			w[i] = cpu_to_le32(s);
 		}
 		for (; i < words; i++)
 			w[i] = 0;
@@ -742,6 +752,26 @@ static void bf_recount_users(struct snd_usb_babyface *chip)
 	spin_unlock_irqrestore(&chip->lock, flags);
 }
 
+/* Stream model (big picture):
+ *
+ * The PCM stream is entirely asynchronous.  A trigger(START/STOP) does
+ * not touch the hardware; it only changes the shared stream_users
+ * counter (0..2, one per running substream, counted under chip->lock)
+ * and schedules stream_work.  The work runs in process context (the
+ * control transfers and usb_submit_urb() calls must sleep):
+ *
+ *  - 1st user (users 0 -> 1): cold-init + the session trigger pair,
+ *    then the interrupt URBs (nurbs in each direction) are submitted and
+ *    the session is armed; the mixer state is re-applied afterwards.
+ *  - last user (users 1 -> 0): the URBs are killed and the session
+ *    disarmed.
+ *
+ * So the device has exactly one live stream regardless of how many
+ * substreams run, and a playback+capture pair shares it.  An app that
+ * triggers while the work is running just increments stream_users; the
+ * work's re-count on the error path (bf_recount_users) reflects the
+ * RUNNING state so a recovered app re-arms from a clean slate.
+ */
 void babyface_stream_work(struct work_struct *work)
 {
 	struct snd_usb_babyface *chip =
@@ -783,7 +813,7 @@ void babyface_stream_work(struct work_struct *work)
 	if (users > 0 && !chip->streaming) {
 		/* The firmware only validates a stream session that is
 		 * preceded by the full cold-init (the user-space reference
-		 * sends streaming_init at every session start — without it
+		 * sends streaming_init at every session start - without it
 		 * the outputs stay silent).  The 0x16 clear wipes the mixer
 		 * registers, so the cached state is re-applied after the arm.
 		 */
@@ -831,7 +861,7 @@ void babyface_stream_work(struct work_struct *work)
 			goto err;
 
 		/* The 0x16 clear also wipes the flag registers (loopback,
-		 * AN1>2, stereo link, width, FX send, MS) — re-apply them.
+		 * AN1>2, stereo link, width, FX send, MS) - re-apply them.
 		 */
 		ret = bf_state_apply_flags(chip);
 		if (ret < 0)
@@ -851,7 +881,7 @@ void babyface_stream_work(struct work_struct *work)
 err:
 	dev_err(&chip->dev->dev, "failed to start stream: %d\n", ret);
 	babyface_stream_kill(chip);
-	/* The apps already got a successful trigger — wake them with an
+	/* The apps already got a successful trigger - wake them with an
 	 * XRUN so a failed start (device wedged, cold-init error) does not
 	 * leave them hung in read/write with no URBs in flight.
 	 */
@@ -860,12 +890,12 @@ err:
 	mutex_unlock(&chip->mutex);
 }
 
-/* ── PCM ─────────────────────────── */
+/* -- PCM --------------------------- */
 
 static const struct snd_pcm_hardware babyface_pcm_hw = {
 	.info = SNDRV_PCM_INFO_INTERLEAVED |
 		SNDRV_PCM_INFO_BLOCK_TRANSFER,
-	.formats = SNDRV_PCM_FMTBIT_S24_LE,
+	.formats = SNDRV_PCM_FMTBIT_S32_LE,
 	.rate_min = 32000,
 	.rate_max = 192000,
 	.channels_min = 2,
@@ -888,10 +918,17 @@ static int babyface_pcm_open(struct snd_pcm_substream *subs)
 					 &bf_rates_constraint);
 	if (ret < 0)
 		return ret;
+	/* The stream is 24-bit audio in a 32-bit container, left-justified
+	 * (the device word carries the sample in bits 31-8).  Declare the
+	 * valid-bit width so user-space knows to ignore the low 8 bits.
+	 */
+	ret = snd_pcm_hw_constraint_msbits(rt, 0, 32, 24);
+	if (ret < 0)
+		return ret;
 	/* One URB delivers frames_per_urb frames per interrupt; a period must
 	 * span at least one URB so a completion crosses at most one period
 	 * boundary.  Constrain in frames (not bytes) so the minimum period
-	 * does not balloon at low channel counts: 2 ch @ 48 kHz → 256
+	 * does not balloon at low channel counts: 2 ch @ 48 kHz -> 256
 	 * frames (5.3 ms) instead of 1536 frames from a 12-ch byte clamp.
 	 */
 	ret = snd_pcm_hw_constraint_minmax(rt, SNDRV_PCM_HW_PARAM_PERIOD_SIZE,
@@ -934,7 +971,7 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 	/* The stream URBs must be at least one alt packet wide: the device
 	 * delivers its IN data in alt-sized packets (448/640/1024 B for
 	 * alt 1/2/3), and a smaller URB buffer makes the host controller
-	 * discard the transfer with -EOVERFLOW (babble) — seen at
+	 * discard the transfer with -EOVERFLOW (babble) - seen at
 	 * 176.4/192 kHz with frames_per_urb below 32.  Return a clean
 	 * error instead of a silently dead capture stream.
 	 */
@@ -950,7 +987,7 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 		/* Both directions share one clock, so a rate change must not
 		 * race live transfers.  Stop the URBs, re-point the bandwidth
 		 * class and let the stream work restart the session at the
-		 * new rate — the other running substream briefly sees a rate
+		 * new rate - the other running substream briefly sees a rate
 		 * step (PipeWire re-negotiates via its resampler) instead of
 		 * this open failing with -EBUSY (which killed the PW sink).
 		 */
@@ -1008,7 +1045,7 @@ static int babyface_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		chip->hw_ptr[subs->stream] = 0;
 		chip->prev_period[subs->stream] = 0;
 		/* stream_users is shared by the two substreams (separate
-		 * locks) — serialize the ++/-- so a concurrent trigger on
+		 * locks) - serialize the ++/-- so a concurrent trigger on
 		 * the other direction can't lose an increment (which would
 		 * stop the stream while a substream still runs).
 		 */
@@ -1066,7 +1103,7 @@ MODULE_PARM_DESC(nurbs, "URBs in flight per direction, 1..16 (16 = low-latency).
 module_param(panel_poll_ms, int, 0644);
 MODULE_PARM_DESC(panel_poll_ms, "Front-panel poll interval in ms, 10..1000 (20 = default, matches Windows' ~50 Hz).");
 
-/* ── USB driver ───────────────────────── */
+/* -- USB driver ------------------------- */
 
 static void babyface_private_free(struct snd_card *card)
 {
@@ -1140,7 +1177,7 @@ static int babyface_probe(struct usb_interface *intf,
 	 * reference while streaming or while the panel poll/keepalive
 	 * timers are running, so an autosuspend request could race a
 	 * live stream or panel tick. Disable it explicitly rather than
-	 * ship an untested code path — full autosuspend support (correct
+	 * ship an untested code path - full autosuspend support (correct
 	 * autopm_get/put pairing around the stream and the panel/keepalive
 	 * work) is a deliberate follow-up, not an oversight.
 	 */
@@ -1287,10 +1324,10 @@ static int babyface_probe(struct usb_interface *intf,
 
 	/* The DSP coefficient stream (EQ, bulk ep 0x0A) lives on interface
 	 * 1, which has a single altsetting (alt 0) already active in the
-	 * default configuration — the endpoint is scheduled, no
+	 * default configuration - the endpoint is scheduled, no
 	 * SET_INTERFACE or interface claim is needed (the earlier
 	 * -EAGAIN was the on-stack transfer buffer, and SET_INTERFACE on
-	 * interface 1 wedged the iface-5 audio stream — playback URBs
+	 * interface 1 wedged the iface-5 audio stream - playback URBs
 	 * never completed).
 	 */
 
@@ -1330,7 +1367,7 @@ static void babyface_disconnect(struct usb_interface *intf)
 		return;
 
 	/* Idempotence guard: a disconnect can race a re-probe (usbfs
-	 * detach/re-attach) — tear the card down exactly once.
+	 * detach/re-attach) - tear the card down exactly once.
 	 */
 	usb_set_intfdata(intf, NULL);
 	if (chip->shutdown)
@@ -1399,7 +1436,7 @@ static int babyface_resume(struct usb_interface *intf)
 
 	/* The device lost its state across the suspend; re-run the cold
 	 * init and re-apply the cached mixer state.  Suspended PCM
-	 * substreams are woken by the core — apps get -ESTRPIPE and
+	 * substreams are woken by the core - apps get -ESTRPIPE and
 	 * restart (the trigger re-arms the stream).
 	 */
 	mutex_lock(&chip->mutex);

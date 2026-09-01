@@ -1,7 +1,7 @@
-From 5d73bf3e90417432a1ec61f4a3b4ce04e88078c1 Mon Sep 17 00:00:00 2001
-From: Iswad <iswadlillah@gmail.com>
-Date: Tue, 1 Sep 2026 08:55:32 +0100
-Subject: [PATCH 4/4] ALSA: usb: babyface-pro: add the hardware DSP EQ
+From 13cd3003a76b6e52333fbe5b083a4cc4a35378ba Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
+Date: Tue, 1 Sep 2026 15:39:29 +0100
+Subject: [RFC PATCH v3 4/4] ALSA: usb: babyface-pro: add the hardware DSP EQ
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -19,7 +19,7 @@ Assisted-by: DeepSeek V4 Flash
  1 file changed, 565 insertions(+), 5 deletions(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index 4904fe486..c28175199 100644
+index 9422a73d3..938e47368 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
 @@ -1343,7 +1343,6 @@ int babyface_create_controls(struct snd_usb_babyface *chip)
@@ -114,7 +114,7 @@ index 4904fe486..c28175199 100644
 +	if (gain_x10 == 0 || q100 <= 0) {
 +		/* Inactive band: identity words (also guards the alpha
 +		 * division below against the default Q=0 the controls start
-+		 * with — a user setting gain before Q used to hit a kernel
++		 * with - a user setting gain before Q used to hit a kernel
 +		 * divide-by-zero oops).
 +		 */
 +		w[0] = 0;
@@ -301,7 +301,7 @@ index 4904fe486..c28175199 100644
 +
 +/* Recompute one strip's words + low cut from its params, re-upload.
 + * Lock-free by convention: every caller must already hold chip->mutex
-+ * (bf_eq_put() and bf_eq_reupload() do) — asserting it here catches a
++ * (bf_eq_put() and bf_eq_reupload() do) - asserting it here catches a
 + * future caller that forgets, instead of a silent self-deadlock.
 + */
 +static void bf_eq_update_strip(struct snd_usb_babyface *chip, int strip)
@@ -330,7 +330,7 @@ index 4904fe486..c28175199 100644
 +}
 +
 +/* Recompute + re-upload all four strips (rate change). Caller must
-+ * hold chip->mutex — bf_eq_update_strip()/bf_eq_write_strip() are
++ * hold chip->mutex - bf_eq_update_strip()/bf_eq_write_strip() are
 + * lock-free by convention (see bf_eq_put()) and the only caller,
 + * babyface_pcm_hw_params(), already holds the lock across the rate
 + * change; locking here too self-deadlocked it (hung-task: "blocked
@@ -439,7 +439,7 @@ index 4904fe486..c28175199 100644
 +		/* Inverse of put's index->dB map: slope_db stores the raw
 +		 * 6/12/18/24 dB/oct value, but an ENUMERATED control's .get
 +		 * must return the enum item index (0-3), same as .put
-+		 * receives — returning the raw dB value here (the bug this
++		 * receives - returning the raw dB value here (the bug this
 +		 * replaces) fed back an out-of-range index to every ALSA
 +		 * consumer (confirmed via amixer: writing index 1 read back
 +		 * as value 12, not 1).

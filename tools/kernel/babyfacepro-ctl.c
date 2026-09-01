@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * RME Babyface Pro FS — proprietary-mode USB audio driver
+ * RME Babyface Pro FS - proprietary-mode USB audio driver
  *
  * ALSA control surface: mixer (masters, preamp, crosspoints, flags,
  * gains), front-panel poll + controls, and the hardware DSP EQ
@@ -43,7 +43,7 @@ const struct bf_source bf_sources[14] = {
 	{ "PB6",    22, 23 },
 };
 
-/* Crosspoint-map output order vs the master-map order — HARDWARE-
+/* Crosspoint-map output order vs the master-map order - HARDWARE-
  * VERIFIED 2026-08-24: the block that feeds the Phones is the FIRST
  * crosspoint block (0x34), while the Phones master is the SECOND
  * (0x03E2/0x0006).  The crosspoint map lists the Phones first (the
@@ -53,22 +53,22 @@ const struct bf_source bf_sources[14] = {
  */
 const u8 bf_xpoint_block[6] = { 1, 0, 2, 3, 4, 5 };
 
-/* Master-register output order — the master map lists AN1/2 first
+/* Master-register output order - the master map lists AN1/2 first
  * (0x03E0) and the Phones master SECOND (0x03E2, HARDWARE-VERIFIED
  * 2026-08-24); the crosspoint blocks are in the opposite order
  * (Phones = block 0x34 first, hence bf_xpoint_block above).  Control
- * index → canonical output (AN1/2=0, PH3/4=1, ...) = the master
+ * index -> canonical output (AN1/2=0, PH3/4=1, ...) = the master
  * register position directly: the names 'AN1/2 Playback Volume' etc.
- * must match the register they write (corrected 2026-08-26 — the
+ * must match the register they write (corrected 2026-08-26 - the
  * previous {1,0,...} swap made 'AN1/2' drive the Phones and 'PH3/4'
  * drive the AN1/2 analog out).
  */
 static const u8 bf_master_out[6] = { 0, 1, 2, 3, 4, 5 };
 
-/* The 16-bit master value → the 8-bit companion code (0.5 dB/step).
- * Integer-only: half_db = 12·log2(v/0x2000) via ilog2 + an 8-bit
- * fractional-octave table (12·log2(1 + n/256), ~0.05 dB resolution —
- * fine enough for the ±0.5 dB panel wheel to track the round-trip).
+/* The 16-bit master value -> the 8-bit companion code (0.5 dB/step).
+ * Integer-only: half_db = 12*log2(v/0x2000) via ilog2 + an 8-bit
+ * fractional-octave table (12*log2(1 + n/256), ~0.05 dB resolution -
+ * fine enough for the +/-0.5 dB panel wheel to track the round-trip).
  */
 static const u8 bf_lg2_frac[256] = {
 	0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -89,7 +89,7 @@ static const u8 bf_lg2_frac[256] = {
 	11, 11, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
 };
 
-/* 16-bit master → dB×2 (12 half-dB per octave; 0x2000 = 0 dB).
+/* 16-bit master -> dBx2 (12 half-dB per octave; 0x2000 = 0 dB).
  * Shared by the 8-bit companion and the front-panel OUT wheel.
  */
 int bf_master_half_db(u16 vol16)
@@ -102,8 +102,8 @@ int bf_master_half_db(u16 vol16)
 	return 12 * (int)k - 156 + bf_lg2_frac[frac];
 }
 
-/* dB×2 → 16-bit master (0x2000·2^(half_db/12), rounded).  The
- * inverse of bf_master_half_db — the 12th-root table 2^(n/12).
+/* dBx2 -> 16-bit master (0x2000*2^(half_db/12), rounded).  The
+ * inverse of bf_master_half_db - the 12th-root table 2^(n/12).
  */
 static const u16 bf_twelfth[12] = {
 	0x1000, 0x10f4, 0x11f6, 0x1307, 0x1429, 0x155c,
@@ -120,7 +120,7 @@ int bf_master_16bit(int half_db)
 		n += 12;
 		k--;
 	}
-	v = (u32)bf_twelfth[n] << 1;	/* 0x2000·2^(n/12) */
+	v = (u32)bf_twelfth[n] << 1;	/* 0x2000*2^(n/12) */
 	if (k >= 0) {
 		v <<= k;
 	} else {
@@ -141,7 +141,7 @@ u8 bf_master_8bit(u16 vol16)
  * re-uploads afterwards.  The kernel driver has no saved scene (no
  * readback for faders), so it applies TotalMix's factory default:
  * every source routed to every output at unity, masters at 0 dB and
- * unmuted — the user/TuxMix can restore its own scene on top.
+ * unmuted - the user/TuxMix can restore its own scene on top.
  */
 int babyface_write_default_mixer(struct snd_usb_babyface *chip)
 {
@@ -175,7 +175,7 @@ int babyface_write_default_mixer(struct snd_usb_babyface *chip)
 
 	/* Every source into every output pair, L and R, at 0 dB (the
 	 * standard map; the low map is only a shadow).  The addresses use
-	 * the source's idx_l/idx_r on the canonical block — writing the raw
+	 * the source's idx_l/idx_r on the canonical block - writing the raw
 	 * index on both bases would put PB1 R on the L side and PB1 L on
 	 * the R side (L+R on both = mono).  The "cross" registers
 	 * (L-reg idx_r / R-reg idx_l) are left at 0; the restore at stream
@@ -219,7 +219,7 @@ int babyface_write_default_mixer(struct snd_usb_babyface *chip)
 
 /* The device resets its output masters to mute when a stream session
  * starts (hardware-verified 2026-08-24: after a stream start the
- * output stays silent until a master write lands — only a write
+ * output stays silent until a master write lands - only a write
  * un-mutes the 8-bit register).  Re-apply the six output masters +
  * mutes from the cache; also used by the PM restore path.
  */
@@ -256,10 +256,10 @@ int bf_apply_masters(struct snd_usb_babyface *chip)
 	return 0;
 }
 
-/* ── mixer controls ──────────────────────── */
+/* -- mixer controls ------------------------ */
 
 /* dB TLV for the output masters: 0x2000 = 0 dB, 0x4000 = +6 dB
- * (CALIBRATION.md) with the hardware 20*log10(v/0x2000) law — the raw
+ * (CALIBRATION.md) with the hardware 20*log10(v/0x2000) law - the raw
  * 16-bit value IS the linear amplitude.  WirePlumber needs this to map
  * the volume 1:1 to the hardware control instead of applying a software
  * volume on top (which left the output ~30 dB down).
@@ -275,7 +275,7 @@ static int bf_master_info(struct snd_kcontrol *kctl,
 	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
 	uinfo->count = 2;
 	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 0x4000;	/* +6 dB = 2 × 0dB(0x2000) */
+	uinfo->value.integer.max = 0x4000;	/* +6 dB = 2 x 0dB(0x2000) */
 	uinfo->value.integer.step = 1;
 	return 0;
 }
@@ -446,7 +446,7 @@ int bf_preamp_state_write(struct snd_usb_babyface *chip)
 	return bf_vendor_write(chip, BF_REQ_PREAMP_COMMIT, 0x0000, 0x0000);
 }
 
-/* ── crosspoint matrix (6 outputs × 14 sources) ────────────── */
+/* -- crosspoint matrix (6 outputs x 14 sources) -------------- */
 
 static int bf_xpoint_info(struct snd_kcontrol *kctl,
 			  struct snd_ctl_elem_info *uinfo)
@@ -494,7 +494,7 @@ static int bf_xpoint_put(struct snd_kcontrol *kctl,
 	flag = bf_flag_cycle[chip->flag_cnt];
 	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 
-	/* L register = 0x0034 + 0x34·blk + idx, R = 0x004E + 0x34·blk + idx
+	/* L register = 0x0034 + 0x34*blk + idx, R = 0x004E + 0x34*blk + idx
 	 * (mono sources use the same idx on both sides).
 	 */
 	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l,
@@ -547,7 +547,7 @@ int babyface_create_xpoints(struct snd_usb_babyface *chip)
 	return 0;
 }
 
-/* ── flags / special controls (pitch, loopback, link, width, FX) ── */
+/* -- flags / special controls (pitch, loopback, link, width, FX) -- */
 
 static int bf_switch_info(struct snd_kcontrol *kctl,
 			  struct snd_ctl_elem_info *uinfo)
@@ -596,7 +596,7 @@ static int bf_pitch_put(struct snd_kcontrol *kctl,
 		goto out;
 
 	/* The 0x1B DDS quad (16.8 fixed point, banked).  p is 0.1 % steps:
-	 * DDS_24 = round(50000·256/(1+p/1000)) = round(12800000000/(1000+p)).
+	 * DDS_24 = round(50000*256/(1+p/1000)) = round(12800000000/(1000+p)).
 	 */
 	dds24 = div_u64(12800000000ULL + (u32)(1000 + p) / 2, 1000 + p);
 	dds16 = dds24 >> 8;
@@ -640,8 +640,8 @@ static int bf_loopback_get(struct snd_kcontrol *kctl,
 	return 0;
 }
 
-/* Write the full 30-channel loopback map: pair (2·out, 2·out+1) at
- * `on` (0x0001/0x0000), all other channels cleared — exactly what
+/* Write the full 30-channel loopback map: pair (2*out, 2*out+1) at
+ * `on` (0x0001/0x0000), all other channels cleared - exactly what
  * TotalMix sends on every loopback toggle (cap_loopback2.pcap).  The
  * full-map write is also the reliable OFF (the old per-pair write
  * sometimes failed to disengage on the hardware).
@@ -764,13 +764,13 @@ static int bf_ms_get(struct snd_kcontrol *kctl,
 	return 0;
 }
 
-/* MS-proc: engage per the cap_ms2.pcap ON pattern — write 0x0000 to
+/* MS-proc: engage per the cap_ms2.pcap ON pattern - write 0x0000 to
  * ALL FOUR AN2 (side) crosspoints: standard map 0x0035/0x004F (L/R)
- * + low map 0x0001/0x001B (L/R) — the side path is muted (ear-
+ * + low map 0x0001/0x001B (L/R) - the side path is muted (ear-
  * verified 2026-08-26 with the mic on AN2: MS ON = silence); release
  * restores the cached fader values (host-side, like TotalMix).
  * (The 0x1000/0x0004 writes are the DISENGAGE restore values seen in
- * cap_ms2 — the driver had them inverted on the engage path.)
+ * cap_ms2 - the driver had them inverted on the engage path.)
  */
 static int bf_ms_put(struct snd_kcontrol *kctl,
 		     struct snd_ctl_elem_value *ucontrol)
@@ -820,7 +820,7 @@ out:
 	return ret;
 }
 
-/* DIM — cap_dim2.pcap: an absolute -20 dB on the Phones master
+/* DIM - cap_dim2.pcap: an absolute -20 dB on the Phones master
  * (out 1: 8-bit 0xCB / 16-bit 0x0333) regardless of the current level,
  * plus the 0x17 wVal=0x2000 wIdx=0x2000 flag; release restores the
  * pre-DIM master host-side.  The master cache keeps the real volume.
@@ -937,11 +937,11 @@ static int bf_width_put(struct snd_kcontrol *kctl,
 	mutex_lock(&chip->mutex);
 	if (w == chip->width)
 		goto out;
-	/* Width spread: L = 0x1000·(1+w), R = 0x1000·(1−w), L+R = 0x2000.
+	/* Width spread: L = 0x1000*(1+w), R = 0x1000*(1-w), L+R = 0x2000.
 	 * TotalMix writes the strip's src pair on BOTH maps (cap_width3-7,
-	 * PROTOCOL.md “Width strip mapping”): the low map (0x0000+src L /
+	 * PROTOCOL.md "Width strip mapping"): the low map (0x0000+src L /
 	 * 0x001A+src R) and the std block-0 map (0x0034+src L /
-	 * 0x004E+src R) — the stereo pair spreads L/R in opposition, the
+	 * 0x004E+src R) - the stereo pair spreads L/R in opposition, the
 	 * mirror src (AN2) gets the swapped values.
 	 */
 	l = (u16)(((0x2000 * (100 + w) / 2) + 50) / 100);
@@ -961,7 +961,7 @@ static int bf_width_put(struct snd_kcontrol *kctl,
 		goto out;
 	/* Std block-0 map (item 0b, the missing half): AN1 L=0x0034,
 	 * R=0x004E; AN2 L=0x0035, R=0x004F.  (The playback strips PB2-6
-	 * target block n−2 — 0x00AE family — reserved for the per-strip
+	 * target block n-2 - 0x00AE family - reserved for the per-strip
 	 * controls.)
 	 */
 	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l, 0x0034);
@@ -1173,7 +1173,7 @@ out:
 
 /* Gain scales: the mic preamps (AN1/2) span 0-65 dB over raw 0-20
  * (3.25 dB/step); the Hi-Z instrument inputs (AN3/4) are digitally
- * limited to 9 dB over raw 0-18 (0.5 dB/step) — manual §10, raw
+ * limited to 9 dB over raw 0-18 (0.5 dB/step) - manual sec. 10, raw
  * ranges verified from cap_gain12/cap_gain34.pcap.  Shared by the GUI
  * controls and the front-panel gain wheel.
  */
@@ -1209,8 +1209,8 @@ static int bf_gain_get(struct snd_kcontrol *kctl,
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
 	int mic = kctl->private_value;
 
-	/* chip->gain[] tracks the dB (the raw is derived at write time —
-	 * the 3.25 dB/step mic grid would otherwise make a ±1 dB wheel
+	/* chip->gain[] tracks the dB (the raw is derived at write time -
+	 * the 3.25 dB/step mic grid would otherwise make a +/-1 dB wheel
 	 * stick on a raw boundary).
 	 */
 	ucontrol->value.integer.value[0] = chip->gain[mic];
@@ -1367,7 +1367,7 @@ static const char *const bf_panel_select_texts[] = {
 	"Left", "Right", "Both", "None", NULL
 };
 
-/* byte3 button flash → event code (0 = none).  The idle byte3 is 0x40;
+/* byte3 button flash -> event code (0 = none).  The idle byte3 is 0x40;
  * a press flashes the value below the base for one or two poll frames.
  */
 static int bf_panel_button_decode(u8 flash)
@@ -1383,7 +1383,7 @@ static int bf_panel_button_decode(u8 flash)
 	}
 }
 
-/* (byte2 >> 4) & 7 = IN position 4/5/6 → enum index (0 = not in range). */
+/* (byte2 >> 4) & 7 = IN position 4/5/6 -> enum index (0 = not in range). */
 static int bf_panel_in_decode(u8 nib)
 {
 	switch (nib) {
@@ -1412,18 +1412,18 @@ static int bf_panel_out_decode(u8 v)
 	}
 }
 
-/* ── MIX-mode monitoring level (fader curve) ────────────────
- * Calibrated crosspoint-fader curve (AN1→AN1/2, cap_calib.pcap
+/* -- MIX-mode monitoring level (fader curve) ----------------
+ * Calibrated crosspoint-fader curve (AN1->AN1/2, cap_calib.pcap
  * 2026-08-22; the same table as tuxmix-core/src/usb.rs FADER_CURVE).
- * dB stored ×2 (half-dB grid): the MIX wheel steps ±0.5 dB per click
- * on this curve (cap_mix.pcap).  0x0000 = −inf (digital mute),
- * 0x0003 = −62 dB, … 0x2D41 = +6 dB.  Raw values interpolate linearly
+ * dB stored x2 (half-dB grid): the MIX wheel steps +/-0.5 dB per click
+ * on this curve (cap_mix.pcap).  0x0000 = -inf (digital mute),
+ * 0x0003 = -62 dB, ... 0x2D41 = +6 dB.  Raw values interpolate linearly
  * between the 1-dB points.
  */
-#define BF_FADER_DB2_INF	(-130)	/* −65 dB = the wheel's −inf floor */
+#define BF_FADER_DB2_INF	(-130)	/* -65 dB = the wheel's -inf floor */
 
 static const struct bf_fader_pt {
-	s16 db2;	/* dB × 2 */
+	s16 db2;	/* dB x 2 */
 	u16 raw;
 } bf_fader_curve[] = {
 	{ -124, 0x0003 }, { -122, 0x0004 }, { -120, 0x0005 },
@@ -1451,7 +1451,7 @@ static const struct bf_fader_pt {
 	{    8, 0x23dc }, {   10, 0x283d }, {   12, 0x2d41 },
 };
 
-/* Fader raw → dB×2 (linear interpolation; raw 0 = −inf). */
+/* Fader raw -> dBx2 (linear interpolation; raw 0 = -inf). */
 static int bf_fader_raw_to_db2(u16 raw)
 {
 	int i;
@@ -1470,7 +1470,7 @@ static int bf_fader_raw_to_db2(u16 raw)
 	return bf_fader_curve[ARRAY_SIZE(bf_fader_curve) - 1].db2;
 }
 
-/* dB×2 → fader raw (linear interpolation; below −62 dB = mute 0). */
+/* dBx2 -> fader raw (linear interpolation; below -62 dB = mute 0). */
 static u16 bf_fader_db2_to_raw(int db2)
 {
 	int i;
@@ -1489,12 +1489,12 @@ static u16 bf_fader_db2_to_raw(int db2)
 	return bf_fader_curve[ARRAY_SIZE(bf_fader_curve) - 1].raw;
 }
 
-/* MIX-mode VU display law — monitoring dB×2 → the 0x1A 0x000A display
+/* MIX-mode VU display law - monitoring dBx2 -> the 0x1A 0x000A display
  * value.  Piecewise-linear through the captured (dB, display) points
- * (cap_mix.pcap 2026-08-23: (−62,0) (−54,1) (−48,2) (−42.5,3)
- * (−35,4) (−28.4,5); cap_panel.pcap: (−7.4,10) (−6.7,11)
- * (−4.6,12)) — a log-ish VU scale (coarse at the bottom, ~1.4 dB/step
- * near 0).  The −28..−8 dB middle is interpolated; the exact law is
+ * (cap_mix.pcap 2026-08-23: (-62,0) (-54,1) (-48,2) (-42.5,3)
+ * (-35,4) (-28.4,5); cap_panel.pcap: (-7.4,10) (-6.7,11)
+ * (-4.6,12)) - a log-ish VU scale (coarse at the bottom, ~1.4 dB/step
+ * near 0).  The -28..-8 dB middle is interpolated; the exact law is
  * pending the cap_mixdisp.pcap full-range sweep (TODO 0g).
  */
 static int bf_mix_display(int db2)
@@ -1520,16 +1520,16 @@ static int bf_mix_display(int db2)
 			return pts[i].disp + (int)((num + den / 2) / den);
 		}
 	}
-	/* Above −4.6 dB: keep the last slope (2 dB/step) up to +6 dB. */
+	/* Above -4.6 dB: keep the last slope (2 dB/step) up to +6 dB. */
 	return pts[ARRAY_SIZE(pts) - 1].disp +
 	       clamp((db2 - pts[ARRAY_SIZE(pts) - 1].db2) / 4, 0, 12);
 }
 
 /* The kernel driver plays the TotalMix role for the MIX button (the
  * standalone emulator is hardware-validated in tuxmix-core/src/panel.rs
- * + usb.rs): one wheel click in fader mode = ±0.5 dB on the SELECT-
+ * + usb.rs): one wheel click in fader mode = +/-0.5 dB on the SELECT-
  * chosen channel(s) of the IN-selected pair, into the OUT-selected
- * output's crosspoint block — the STANDARD map only (cap_mix.pcap /
+ * output's crosspoint block - the STANDARD map only (cap_mix.pcap /
  * cap_select2.pcap, no low-map mirror).  Mirrors the change into the
  * xpoint cache so the ALSA controls follow the wheel.  Takes the mutex
  * (the 0x12 writes cycle the transaction flag like the mixer puts).
@@ -1549,7 +1549,7 @@ static void bf_panel_mix_wheel(struct snd_usb_babyface *chip, int delta)
 	u16 raw, flag;
 	int i;
 
-	/* SELECT-chosen channel(s) of the IN pair (manual §5.1: SELECT
+	/* SELECT-chosen channel(s) of the IN pair (manual sec. 5.1: SELECT
 	 * steps left/right/both; none = nothing selected = no-op wheel).
 	 * Source indices: AN1/AN2 = 0/1, AN3/AN4 = 2/3, AS1/2 = 4.
 	 */
@@ -1585,7 +1585,7 @@ static void bf_panel_mix_wheel(struct snd_usb_babyface *chip, int delta)
 		chip->xpoint[out][targets[i]][1] = raw;
 		/* MIX-mode VU display shadow (0x1A 0x000A+mic): TotalMix
 		 * mirrors the monitoring level into the panel display family
-		 * (cap_mix/cap_panel.pcap) — the input VU segments follow it.
+		 * (cap_mix/cap_panel.pcap) - the input VU segments follow it.
 		 * Written only on change (the captures show TotalMix updating
 		 * it on segment crossings).  Law = bf_mix_display (TODO 0g
 		 * pending the exact full-range capture).
@@ -1605,7 +1605,7 @@ static void bf_panel_mix_wheel(struct snd_usb_babyface *chip, int delta)
 }
 
 /* Write an output's L/R masters (8-bit companions + 16-bit with the
- * transaction flag) and mirror into the cache — shared by the OUT
+ * transaction flag) and mirror into the cache - shared by the OUT
  * volume wheel and the balance wheel.  Caller holds the mutex.
  */
 static void bf_panel_write_master(struct snd_usb_babyface *chip, int out,
@@ -1633,10 +1633,10 @@ static void bf_panel_write_master(struct snd_usb_babyface *chip, int out,
 	}
 }
 
-/* OUT-mode wheel: the master fader of the OUT-selected output, ±0.5 dB
+/* OUT-mode wheel: the master fader of the OUT-selected output, +/-0.5 dB
  * per click (cap_set2/cap_dim.pcap: the wheel writes the 16-bit master
- * 0x03E0+2·out on the master curve 0x2000·2^(dB/6); the driver keeps
- * the 8-bit companion in sync like bf_master_put — the 8-bit is the
+ * 0x03E0+2*out on the master curve 0x2000*2^(dB/6); the driver keeps
+ * the 8-bit companion in sync like bf_master_put - the 8-bit is the
  * real volume).  BOTH sides move by the same dB so an existing
  * balance (hold-SELECT) is preserved.  Same output mapping as the MIX
  * wheel (Phones = canon 1, Opt = ADAT7/8 = canon 5, else AN1/2).
@@ -1658,9 +1658,9 @@ static void bf_panel_out_wheel(struct snd_usb_babyface *chip, int delta)
 }
 
 /* IN-mode wheel: the gain of the SELECT-chosen channel(s) of the
- * IN-selected pair, ±1 dB per click (manual §5.1: SELECT steps
+ * IN-selected pair, +/-1 dB per click (manual sec. 5.1: SELECT steps
  * left/right/both, then the wheel changes the gain).  Writes the PANEL
- * gain registers 0x1A 0x000A+mic (cap_select.pcap 2026-08-24 — the
+ * gain registers 0x1A 0x000A+mic (cap_select.pcap 2026-08-24 - the
  * "ADC gain" family, which drives the same preamp as the GUI
  * 0x0000+mic; the cache tracks the raw either way).  Opt has no
  * preamp and SELECT None = no target.
@@ -1695,13 +1695,13 @@ static void bf_panel_gain_wheel(struct snd_usb_babyface *chip, int delta)
 	mutex_unlock(&chip->mutex);
 }
 
-/* OUT-balance wheel (hold SELECT + wheel — manual §5.1 "Output
+/* OUT-balance wheel (hold SELECT + wheel - manual sec. 5.1 "Output
  * Balance"): moves the stereo image of the OUT-selected output by
  * attenuating ONE side, linear in raw (cap_pan_stereo.pcap: the varied
- * side = fixed·(1−|pan|), ~0x9C raw step per click at 0 dB — the PAN
+ * side = fixed*(1-|pan|), ~0x9C raw step per click at 0 dB - the PAN
  * of the stereo hardware output in TotalMix).  The balance position is
  * derived from the L/R master ratio (the louder side is the fixed
- * one), so the gesture needs no extra state — and the OUT wheel below
+ * one), so the gesture needs no extra state - and the OUT wheel below
  * moves both sides by the same dB to preserve an existing balance.
  */
 static void bf_panel_balance_wheel(struct snd_usb_babyface *chip, int delta)
@@ -1709,7 +1709,7 @@ static void bf_panel_balance_wheel(struct snd_usb_babyface *chip, int delta)
 	int out = chip->panel_out == 3 ? 5 :
 		  chip->panel_out == 2 ? 1 : 0;
 	u16 l, r;
-	int bal;		/* −100..+100; + = image right (left varies) */
+	int bal;		/* -100..+100; + = image right (left varies) */
 	u16 fixed, varied;
 
 	mutex_lock(&chip->mutex);
@@ -1738,7 +1738,7 @@ static void bf_panel_balance_wheel(struct snd_usb_babyface *chip, int delta)
 
 /* SET press (byte3 0x42 flash): toggle 48V phantom on the
  * SELECT-chosen mic(s) of the IN-selected pair.  The hardware only
- * does this in standalone mode (online, TotalMix ignores SET — no USB
+ * does this in standalone mode (online, TotalMix ignores SET - no USB
  * write in the captures), but the driver IS the host: it writes the
  * preamp state itself and the P48 LEDs follow (the tuxmix-core
  * emulator, hardware-verified).  Restricted to IN mode + Ch1/2 (the
@@ -1783,7 +1783,7 @@ static void bf_panel_notify(struct snd_usb_babyface *chip, int ctl)
 			       &chip->panel_kctl[ctl]->id);
 }
 
-/* One 0x17 read + decode.  Called from the poll work; no locking needed —
+/* One 0x17 read + decode.  Called from the poll work; no locking needed -
  * the worker is the only writer and the control get callbacks run under
  * the ALSA controls lock (chip->panel_button/wheel are consumed there).
  */
@@ -1797,7 +1797,7 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 	bool mix_flash, fader_now;
 
 	if (bf_vendor_read(chip, BF_REQ_PREAMP, BF_REG_PANEL_READ, st) < 0)
-		return;	/* device gone / busy — retry next tick */
+		return;	/* device gone / busy - retry next tick */
 
 	if (!chip->panel_seen) {
 		chip->panel_seen = true;
@@ -1817,7 +1817,7 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 
 	/* The udev alsactl restore (~100 ms after probe) clobbers the host
 	 * SELECT with a stale stored value (the control is VOLATILE but
-	 * this alsactl stores/restores it anyway) — re-assert the device's
+	 * this alsactl stores/restores it anyway) - re-assert the device's
 	 * power-on state (nothing selected, cycle ARMED) for the first
 	 * ~3 s so the boot always starts in sync.
 	 */
@@ -1829,10 +1829,10 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 	if (btn)
 		chip->panel_button = btn;
 
-	/* Wheel: signed 4-bit wrap delta of the byte2 low nibble — only
-	 * while the mode class is unchanged.  A mode switch (IN 0x4x →
-	 * fader 0x0x on a MIX press, or the OUT counter carrying 0x8F →
-	 * 0x90 — the OUT counter is a full byte, cap_set2.pcap) must not
+	/* Wheel: signed 4-bit wrap delta of the byte2 low nibble - only
+	 * while the mode class is unchanged.  A mode switch (IN 0x4x ->
+	 * fader 0x0x on a MIX press, or the OUT counter carrying 0x8F ->
+	 * 0x90 - the OUT counter is a full byte, cap_set2.pcap) must not
 	 * be read as a wheel jump.  Class: 0 = fader (0x0x), 1 = OUT
 	 * (0x8x/0x9x), 2 = IN (0x4x/0x5x/0x6x).
 	 */
@@ -1850,10 +1850,10 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 		chip->panel_wheel = clamp(chip->panel_wheel + delta,
 					  SHRT_MIN, SHRT_MAX);
 		bf_panel_notify(chip, BF_PANEL_KCTL_WHEEL);
-		/* Wheel by mode (LINUX-VALIDATION §12, the TotalMix
-		 * emulator): MIX → monitoring level, OUT (0x8x/0x9x) → the
+		/* Wheel by mode (LINUX-VALIDATION sec. 12, the TotalMix
+		 * emulator): MIX -> monitoring level, OUT (0x8x/0x9x) -> the
 		 * selected output master (or its balance while SELECT is
-		 * held), IN (0x4x/0x5x/0x6x) → the SELECT-chosen preamp
+		 * held), IN (0x4x/0x5x/0x6x) -> the SELECT-chosen preamp
 		 * gain.
 		 */
 		if (chip->panel_mix)
@@ -1866,7 +1866,7 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 			bf_panel_gain_wheel(chip, delta);
 	}
 
-	/* Selections — keep the previous when the field is not in range
+	/* Selections - keep the previous when the field is not in range
 	 * (the fader-mode readback drops the IN position bits).
 	 */
 	in = bf_panel_in_decode((st[2] >> BF_PANEL_IN_SHIFT) & 0x7);
@@ -1895,15 +1895,15 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 		bf_panel_notify(chip, BF_PANEL_KCTL_OUT);
 	}
 
-	/* SELECT press cycles the channel selection L → R → both → none
-	 * → L (manual §5.1).  The state is NOT in the readback
+	/* SELECT press cycles the channel selection L -> R -> both -> none
+	 * -> L (manual sec. 5.1).  The state is NOT in the readback
 	 * (panelprobe 2026-08-24), so it is tracked host-side.
 	 */
 	if (st[3] == BF_PANEL_FLASH_SELECT &&
 	    chip->panel_prev[3] != BF_PANEL_FLASH_SELECT) {
 		if (!chip->panel_select_armed) {
 			/* Disarmed (IN switch since the last step): the press
-			 * only re-arms the cycle — the device steps on the
+			 * only re-arms the cycle - the device steps on the
 			 * NEXT press (user-verified 2026-08-28).
 			 */
 			chip->panel_select_armed = true;
@@ -1912,10 +1912,10 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 		}
 		bf_panel_notify(chip, BF_PANEL_KCTL_SELECT);
 	}
-	/* SELECT hold (the OUT-balance gesture, manual §5.1 "Output
+	/* SELECT hold (the OUT-balance gesture, manual sec. 5.1 "Output
 	 * Balance"): a tap flashes byte3 0x50 for ~2-3 frames at 20 Hz
-	 * (~100-150 ms — selhold_probe2), a hold keeps it sustained, and
-	 * byte0 does NOT gain the 0x80 engaged bit — so the duration is
+	 * (~100-150 ms - selhold_probe2), a hold keeps it sustained, and
+	 * byte0 does NOT gain the 0x80 engaged bit - so the duration is
 	 * the only discriminator: >= 10 ticks (200 ms at 50 Hz) = held.
 	 */
 	if (st[3] == BF_PANEL_FLASH_SELECT)
@@ -1930,15 +1930,15 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 	    chip->panel_prev[3] != BF_PANEL_FLASH_SET)
 		bf_panel_set_phantom(chip);
 
-	/* MIX (fader mode) — HOST-latched, like TotalMix (cap_mix.pcap,
-	 * cap_select2.pcap): the raw press readback is `0D 0D 41 44` —
+	/* MIX (fader mode) - HOST-latched, like TotalMix (cap_mix.pcap,
+	 * cap_select2.pcap): the raw press readback is `0D 0D 41 44` -
 	 * byte3 flash 0x44, NO engaged bit, byte2 still in the current
-	 * mode.  The host acks the flash with `0x17 0x8480 0x8C80` → the
+	 * mode.  The host acks the flash with `0x17 0x8480 0x8C80` -> the
 	 * device latches fader mode (byte0/1 gain the 0x80 bit, byte2 =
 	 * 0x00+n counter) and STAYS there after the physical release; the
 	 * SECOND 0x44 flash exits it (`0x17 0x0400 0x8000` + `0x8080`).
 	 * A mode button (IN/OUT/SET) pressed during MIX makes the device
-	 * leave fader mode by itself → same exit writes (the user: IN
+	 * leave fader mode by itself -> same exit writes (the user: IN
 	 * must return to gain control).  `panel_saw_fader` gates the
 	 * device-driven exit so a pre-ack readback (byte2 still 0x4x
 	 * while the 0x44 flash shows) never ends MIX before it started.
@@ -1961,7 +1961,7 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 			chip->panel_mix = true;
 			/* Seed the monitoring level at the reference
 			 * crosspoint's current value so the first wheel
-			 * click doesn't jump from −inf (the reference =
+			 * click doesn't jump from -inf (the reference =
 			 * the first SELECT-chosen channel of the IN pair;
 			 * Opt = the AS1/2 pair).
 			 */
@@ -1973,7 +1973,7 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 			chip->panel_mix_raw = chip->xpoint[out][ref][0];
 			/* Seed the VU display shadow at the CURRENT level
 			 * (cap_panel.pcap: TotalMix writes the display value of
-			 * the current fader on engage — 10 in that session —
+			 * the current fader on engage - 10 in that session -
 			 * not a hard 0; cap_mix's 0 was because the fader sat
 			 * at the bottom).  Only the channels the wheel can move.
 			 */
@@ -2027,9 +2027,9 @@ void babyface_panel_start(struct snd_usb_babyface *chip)
 {
 	chip->panel_seen = false;
 	/* The device boots with NOTHING selected (the SELECT cycle starts
-	 * at none → AN1 → AN2 → both → none) — the unreadable selection
+	 * at none -> AN1 -> AN2 -> both -> none) - the unreadable selection
 	 * must start there too, or every later SET is off by one channel
-	 * (host at AN1 while the LEDs show nothing → first SELECT makes
+	 * (host at AN1 while the LEDs show nothing -> first SELECT makes
 	 * the device blink AN1 but the host believes AN2).
 	 */
 	chip->panel_select = 3;	/* none */
@@ -2043,7 +2043,7 @@ void babyface_panel_stop(struct snd_usb_babyface *chip)
 	cancel_delayed_work_sync(&chip->panel_work);
 }
 
-/* ── controls ────────────────────────── */
+/* -- controls -------------------------- */
 
 /* The button/wheel controls hold the LATEST state and are NOT consumed
  * on read: wireplumber subscribes to every notifying control and reads
@@ -2138,7 +2138,7 @@ static int bf_panel_select_get(struct snd_kcontrol *kctl,
 }
 
 /* Writable so software (or the user, after a driver reload) can
- * re-sync the host-tracked SELECT state to the physical card — the
+ * re-sync the host-tracked SELECT state to the physical card - the
  * L/R/both/none state is NOT in the 0x17 readback, so a reload starts
  * at "Left" while the card may sit at any position; a desync makes
  * SET / the wheel / MIX target the wrong channel.  Writing the
@@ -2162,7 +2162,7 @@ static int bf_panel_select_put(struct snd_kcontrol *kctl,
 	return ret;
 }
 
-/* Shared boolean get — private_value selects mix (0) / dim (1). */
+/* Shared boolean get - private_value selects mix (0) / dim (1). */
 static int bf_panel_bool_get(struct snd_kcontrol *kctl,
 			     struct snd_ctl_elem_value *ucontrol)
 {
@@ -2353,7 +2353,7 @@ void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 	if (gain_x10 == 0 || q100 <= 0) {
 		/* Inactive band: identity words (also guards the alpha
 		 * division below against the default Q=0 the controls start
-		 * with — a user setting gain before Q used to hit a kernel
+		 * with - a user setting gain before Q used to hit a kernel
 		 * divide-by-zero oops).
 		 */
 		w[0] = 0;
@@ -2540,7 +2540,7 @@ static int bf_eq_write_strip(struct snd_usb_babyface *chip, int strip)
 
 /* Recompute one strip's words + low cut from its params, re-upload.
  * Lock-free by convention: every caller must already hold chip->mutex
- * (bf_eq_put() and bf_eq_reupload() do) — asserting it here catches a
+ * (bf_eq_put() and bf_eq_reupload() do) - asserting it here catches a
  * future caller that forgets, instead of a silent self-deadlock.
  */
 static void bf_eq_update_strip(struct snd_usb_babyface *chip, int strip)
@@ -2569,7 +2569,7 @@ static void bf_eq_update_strip(struct snd_usb_babyface *chip, int strip)
 }
 
 /* Recompute + re-upload all four strips (rate change). Caller must
- * hold chip->mutex — bf_eq_update_strip()/bf_eq_write_strip() are
+ * hold chip->mutex - bf_eq_update_strip()/bf_eq_write_strip() are
  * lock-free by convention (see bf_eq_put()) and the only caller,
  * babyface_pcm_hw_params(), already holds the lock across the rate
  * change; locking here too self-deadlocked it (hung-task: "blocked
@@ -2678,7 +2678,7 @@ static int bf_eq_get(struct snd_kcontrol *kctl,
 		/* Inverse of put's index->dB map: slope_db stores the raw
 		 * 6/12/18/24 dB/oct value, but an ENUMERATED control's .get
 		 * must return the enum item index (0-3), same as .put
-		 * receives — returning the raw dB value here (the bug this
+		 * receives - returning the raw dB value here (the bug this
 		 * replaces) fed back an out-of-range index to every ALSA
 		 * consumer (confirmed via amixer: writing index 1 read back
 		 * as value 12, not 1).

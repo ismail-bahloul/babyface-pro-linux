@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * RME Babyface Pro FS — proprietary-mode USB audio driver
+ * RME Babyface Pro FS - proprietary-mode USB audio driver
  *
  * The Babyface Pro FS presents two personalities on the USB bus: a
  * class-compliant one (handled by snd-usb-audio) and a proprietary one
@@ -10,28 +10,28 @@
  * interrupt-PCM path, so this driver is standalone (snd-usb-caiaq-style
  * interrupt streaming) instead of an snd-usb-audio quirk.
  *
- * The protocol (vendor requests + 14×32-bit frame layout) was
- * reverse-engineered from Windows captures and validated on hardware —
+ * The protocol (vendor requests + 14x32-bit frame layout) was
+ * reverse-engineered from Windows captures and validated on hardware -
  * tools/usbdump/PROTOCOL.md is the authoritative reference.
  *
  * Stream notes (hardware-validated 2026-08):
  *   - frames_per_urb is tunable 8..1024 (multiple of 8) but must be at
- *     least one alt packet wide — the device delivers IN data in
+ *     least one alt packet wide - the device delivers IN data in
  *     alt-sized packets (448/640/1024 B for alt 1/2/3), smaller URBs
  *     get -EOVERFLOW (babble).  So frames_per_urb >= 8/16/32 for
  *     alt 1/2/3; the driver rejects violating rates in hw_params.
- *   - Validated sweep 256→128→64→32→16 (≤ 128 kHz): with nurbs=8 the
+ *   - Validated sweep 256->128->64->32->16 (<= 128 kHz): with nurbs=8 the
  *     period floor is 32 frames (0.67 ms @ 48 kHz) without glitches;
  *     nurbs=16 drops it to 16 frames (0.33 ms).  Soaks (5-15 min,
  *     2026-08-25) refine this: period 32 is the zero-glitch floor
  *     (0 xruns both directions); period 16 is rock-solid on playback
- *     but the capture side drops ~1 buffer per 7 s (0.67 ms each —
- *     any scheduler hiccup overruns a 0.33 ms ring) — fine for
- *     monitoring, not for clean recording.  Defaults (256×8) match
+ *     but the capture side drops ~1 buffer per 7 s (0.67 ms each -
+ *     any scheduler hiccup overruns a 0.33 ms ring) - fine for
+ *     monitoring, not for clean recording.  Defaults (256x8) match
  *     the RME TotalMix 256-sample buffer; the low-latency profile is
- *     16×16.
+ *     16x16.
  *   - The device only advances the stream while BOTH endpoints have a
- *     pending URB — IN and OUT are always submitted as a pair.
+ *     pending URB - IN and OUT are always submitted as a pair.
  *   - Sample rate = SET_INTERFACE(5, alt) only; the alt is a bandwidth
  *     class (alt 1 = 32/44.1/48/64/88.2 kHz, alt 2 = 96/128 kHz,
  *     alt 3 = 176.4/192 kHz), not a 1:1 rate code.
@@ -61,21 +61,21 @@
 #define BF_ALT_2			2	/* 96/128 kHz, 640-B packets */
 #define BF_ALT_3			3	/* 176.4/192 kHz, 1024-B packets */
 
-/* Default stream geometry — conservative, matches the RME TotalMix
+/* Default stream geometry - conservative, matches the RME TotalMix
  * 256-sample buffer.  Both are tunable via module params; the
  * low-latency profile (validated) is frames_per_urb=16 nurbs=16.
  */
 #define BF_FRAMES_PER_URB_DEFAULT	256
 #define BF_NURBS_DEFAULT		8
 
-/* Front-panel poll interval default — Windows polls the 5-register
+/* Front-panel poll interval default - Windows polls the 5-register
  * status set at ~50 cycles/s (20 ms); match that.  Tunable via the
  * panel_poll_ms module param for reviewers/distros who want a slower
  * (or faster) rate than the Windows-matching default.
  */
 #define BF_PANEL_POLL_MS_DEFAULT	20
 
-#define BF_WORDS_PER_FRAME		14	/* 14 × 32-bit words per frame */
+#define BF_WORDS_PER_FRAME		14	/* 14 x 32-bit words per frame */
 
 /* Consecutive URB errors (CRC/babble/protocol or a failed resubmit)
  * before the stream is stopped and the apps get a clean -EPIPE.
@@ -86,7 +86,7 @@
 #define BF_REQ_KEEPALIVE		0x10	/* settings word / stream trigger */
 #define BF_REQ_STATUS			0x11	/* read 4 B */
 #define BF_REQ_CROSSPOINT		0x12	/* 16-bit crosspoint / master */
-#define BF_REQ_SESSION_STOP		0x13	/* disarm — never sent mid-run */
+#define BF_REQ_SESSION_STOP		0x13	/* disarm - never sent mid-run */
 #define BF_REQ_SESSION_ARM		0x14
 #define BF_REQ_REG_CLEAR		0x16	/* cold-init register clear */
 #define BF_REQ_PREAMP			0x17	/* 48V/PAD state + readback */
@@ -100,22 +100,32 @@
 /* Loopback map width (captured 2026-08-25, cap_loopback2.pcap):
  * TotalMix writes the FULL 30-channel 0x15 map on every toggle (ON =
  * the pair at 0x0001 + the other 28 at 0x0000; OFF = all 0x0000).
- * wIdx = 2×out_index: AN1/2 = 0/1, PH3/4 = 2/3, AS1/2 = 4/5, …
+ * wIdx = 2xout_index: AN1/2 = 0/1, PH3/4 = 2/3, AS1/2 = 4/5, ...
  */
 #define BF_LOOPBACK_CHANNELS		30
 
 /* Register addresses. */
 #define BF_REG_PREAMP			0x003f
-#define BF_REG_MASTER_16		0x03e0	/* + 2·out (bReq 0x12) */
-#define BF_REG_MASTER_8			0x0004	/* + 2·out (bReq 0x1a) */
+#define BF_REG_MASTER_16		0x03e0	/* + 2*out (bReq 0x12) */
+#define BF_REG_MASTER_8			0x0004	/* + 2*out (bReq 0x1a) */
 #define BF_REG_GAIN			0x0000	/* + mic 0-3 (bReq 0x1a) */
-#define BF_REG_CROSS_BASE_L		0x0034	/* + 0x34·out + src (bReq 0x12) */
-#define BF_REG_CROSS_BASE_R		0x004e	/* + 0x34·out + src */
+#define BF_REG_CROSS_BASE_L		0x0034	/* + 0x34*out + src (bReq 0x12) */
+#define BF_REG_CROSS_BASE_R		0x004e	/* + 0x34*out + src */
 #define BF_REG_CROSS_STRIDE		0x0034
 #define BF_REG_KEEPALIVE_SETTINGS	0x05cf
 #define BF_REG_KEEPALIVE_INIT		0x05ff
 
-/* Front-panel readback (babyfacepro-ctl.c): 0x17 read at wIdx 0x0000 — the index
+/* The "cross" register block within each output: the L-registers sit at
+ * odd offsets 5..23 and the R-registers at even offsets 4..22 (the stereo
+ * source pairs that can be cross-linked).  bf_crosspoint_clear_cross()
+ * zeroes them because the cold-init clear does not cover them.
+ */
+#define BF_CROSS_L_FIRST		5
+#define BF_CROSS_L_LAST			23
+#define BF_CROSS_R_FIRST		4
+#define BF_CROSS_R_LAST			22
+
+/* Front-panel readback (babyfacepro-ctl.c): 0x17 read at wIdx 0x0000 - the index
  * the Windows driver polls (cap_buttons2.pcap).  byte0 = preamp 48V/PAD,
  * byte1 = OUT sel + DIM/MIX bits, byte2 = IN sel + wheel counter,
  * byte3 = button flash (see babyfacepro-ctl.c for the full layout).
@@ -125,7 +135,7 @@
 #define BF_PANEL_IN_CH12		0x04
 #define BF_PANEL_IN_CH34		0x05
 #define BF_PANEL_IN_OPT			0x06
-/* OUT selection — the gain-display-mode encoding (cap_dim.pcap);
+/* OUT selection - the gain-display-mode encoding (cap_dim.pcap);
  * babyfacepro-ctl.c also accepts the base-mode 0x01/0x02 (cap_buttons.pcap).
  */
 #define BF_PANEL_OUT_CH12		0x04
@@ -145,10 +155,10 @@
 #define BF_PANEL_BTN_SELECT		5
 #define BF_PANEL_BTN_DIM		6
 
-/* Preamp state byte (0x17, wIdx 0x003F — full state, verified).
+/* Preamp state byte (0x17, wIdx 0x003F - full state, verified).
  * NOTE 2026-08-26 (cap_reflevel3.pcap): the 0x0C "base" is NOT a
- * constant — it is the Instr 3/4 REF-LEVEL bits (bits 2-3, +4dBu =
- * 0x0C set; −10dBV/Boost = clear; Boost additionally commits 0x21
+ * constant - it is the Instr 3/4 REF-LEVEL bits (bits 2-3, +4dBu =
+ * 0x0C set; -10dBV/Boost = clear; Boost additionally commits 0x21
  * wVal 0x0003).  Keeping it always set = forcing the default +4dBu,
  * which is correct for the driver (no ref-level control).
  */
@@ -161,7 +171,7 @@
 
 /* Calibrated master value: 0 dB = 0x2000 (+6 dB = 0x4000).  See
  * CALIBRATION.md.  The crosspoint fader curve is DIFFERENT (0 dB =
- * 0x16a0, top 0x2d41 — see below).
+ * 0x16a0, top 0x2d41 - see below).
  */
 #define BF_MASTER_0DB			0x2000
 
@@ -180,7 +190,7 @@
 /* The front-panel gain/display family (0x1A, wIdx 0x000A + mic 0-3;
  * cap_panel/cap_mix.pcap): in gain mode the wheel writes the "ADC
  * gain" here (drives the same preamp as the GUI 0x0000+mic); in MIX
- * (fader) mode the same registers carry the VU DISPLAY shadow —
+ * (fader) mode the same registers carry the VU DISPLAY shadow -
  * TotalMix writes the monitoring level display value (0..~31) and the
  * card lights the input VU segments accordingly (hardware-verified
  * 2026-08-26 live: sweeping 0x1A values moved the input VU).
@@ -188,7 +198,7 @@
 #define BF_REG_PANEL_GAIN		0x000a
 
 /* Crosspoint fader curve: 0 dB = 0x16a0, +6 dB = 0x2d41 (fader curve,
- * DIFFERENT from the master 0x4000 top — see CALIBRATION.md).
+ * DIFFERENT from the master 0x4000 top - see CALIBRATION.md).
  */
 #define BF_FADER_0DB			0x16a0
 #define BF_FADER_TOP			0x2d41
@@ -237,7 +247,7 @@ struct snd_usb_babyface {
 	unsigned long hw_ptr[2];
 	unsigned long prev_period[2];
 
-	/* mixer state (no gain readback exists — host-side mirror) */
+	/* mixer state (no gain readback exists - host-side mirror) */
 	u16 preamp;			/* 48V/PAD bits, base 0x0c */
 	u8 gain[4];			/* preamp gain in dB 0-65/9 (raw derived
 					 * at write: mic 3.25 dB/step, instr
@@ -258,7 +268,7 @@ struct snd_usb_babyface {
 	int width;			/* width knob -100..+100 */
 	u16 fx_send;			/* FX send level 0..0x1000 */
 
-	/* DSP EQ (babyfacepro-ctl.c) — 4 analog-input strips, params kept in state */
+	/* DSP EQ (babyfacepro-ctl.c) - 4 analog-input strips, params kept in state */
 	struct bf_eq_channel {
 		bool on;		/* EQ engaged (else identity blocks) */
 		s32 slope_db;		/* low-cut slope 6/12/18/24 (0 = off) */
@@ -273,7 +283,7 @@ struct snd_usb_babyface {
 		s32 shared;		/* cached c4 (shared by the slots) */
 	} eq[4];
 
-	/* front panel (babyfacepro-ctl.c) — 0x17 readback poll */
+	/* front panel (babyfacepro-ctl.c) - 0x17 readback poll */
 	struct delayed_work panel_work;
 	unsigned int panel_poll_ms;	/* front-panel poll interval, module param */
 	u8 panel_prev[4];		/* last 0x17 snapshot */
@@ -284,25 +294,25 @@ struct snd_usb_babyface {
 	int panel_wheel;		/* accumulated wheel delta (consumed on get) */
 	int panel_in;			/* enum: 0 unknown, 1 Ch1/2, 2 Ch3/4, 3 Opt */
 	int panel_out;			/* enum: 0 unknown, 1 Ch1/2, 2 Phones, 3 Opt */
-	bool panel_mix;			/* MIX engaged — HOST-latched (like TotalMix):
+	bool panel_mix;			/* MIX engaged - HOST-latched (like TotalMix):
 					 * set by the 0x44 flash ack, NOT by the readback
 					 * 0x80 bit (the raw press has none)
 					 */
 	bool panel_dim;			/* DIM sticky (byte1 bit 0x20) */
 	bool panel_saw_fader;		/* device observed in fader mode (byte2 0x0x)
-					 * — gates the device-driven MIX exit
+					 * - gates the device-driven MIX exit
 					 */
 	int panel_select;		/* SELECT state: 0 L, 1 R, 2 both, 3 none
-					 * (host-tracked — not in the readback)
+					 * (host-tracked - not in the readback)
 					 */
 	int panel_sel_hold;		/* consecutive ticks with byte3 = 0x50
 					 * (SELECT held > 200 ms = the OUT-balance
 					 * gesture; a tap flashes only ~100-150 ms,
-					 * selhold_probe2 — no engaged bit)
+					 * selhold_probe2 - no engaged bit)
 					 */
 	u16 panel_mix_raw;		/* MIX-mode monitoring level (fader raw) */
 	u8 panel_mix_disp[4];		/* MIX-mode VU display shadow per mic
-					 * (0x1A 0x000A+mic — written on change
+					 * (0x1A 0x000A+mic - written on change
 					 * so the input VU follows the wheel)
 					 */
 	struct snd_kcontrol *panel_kctl[7]; /* for snd_ctl_notify */
@@ -338,11 +348,11 @@ struct bf_rate {
 /* Sample-rate / alt classes (babyfacepro.c). */
 const struct bf_rate *bf_rate_lookup(unsigned int rate);
 
-/* ── shared driver state ────────────────────── */
+/* -- shared driver state ---------------------- */
 extern const u16 bf_flag_cycle[4];
 extern const struct bf_source bf_sources[14];
 
-/* babyfacepro-ctl.c — the DSP EQ (struct snd_usb_babyface is defined above). */
+/* babyfacepro-ctl.c - the DSP EQ (struct snd_usb_babyface is defined above). */
 void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 		      s32 gain_x10, s32 fs);
 void bf_eq_reupload(struct snd_usb_babyface *chip);
@@ -350,8 +360,9 @@ int babyface_create_eq(struct snd_usb_babyface *chip);
 extern const u8 bf_xpoint_block[6];
 extern const struct snd_pcm_hw_constraint_list bf_rates_constraint;
 
-/* ── babyfacepro.c ──────────────────────── */
+/* -- babyfacepro.c ------------------------ */
 int bf_vendor_write(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx);
+int bf_vendor_write_cycle(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx);
 int bf_vendor_read(struct snd_usb_babyface *chip, u8 req, u16 idx, u8 *buf);
 int bf_cold_init(struct snd_usb_babyface *chip);
 int bf_crosspoint_clear_cross(struct snd_usb_babyface *chip,
@@ -361,7 +372,7 @@ void babyface_stream_kill(struct snd_usb_babyface *chip);
 void babyface_pcm_stop_both(struct snd_usb_babyface *chip, snd_pcm_state_t state);
 void babyface_stream_work(struct work_struct *work);
 
-/* ── babyfacepro-ctl.c ─────────────────────── */
+/* -- babyfacepro-ctl.c ----------------------- */
 int babyface_write_default_mixer(struct snd_usb_babyface *chip);
 int bf_apply_masters(struct snd_usb_babyface *chip);
 int bf_loopback_write_map(struct snd_usb_babyface *chip, int out, bool on);
@@ -370,20 +381,20 @@ int babyface_create_controls(struct snd_usb_babyface *chip);
 int babyface_create_xpoints(struct snd_usb_babyface *chip);
 int babyface_create_flags(struct snd_usb_babyface *chip);
 
-/* Master + gain law helpers — shared with the front-panel wheels. */
-int bf_master_half_db(u16 vol16);	/* 16-bit master → dB×2 */
-int bf_master_16bit(int half_db);	/* dB×2 → 16-bit master */
-u8 bf_master_8bit(u16 vol16);		/* 16-bit master → 8-bit companion */
+/* Master + gain law helpers - shared with the front-panel wheels. */
+int bf_master_half_db(u16 vol16);	/* 16-bit master -> dBx2 */
+int bf_master_16bit(int half_db);	/* dBx2 -> 16-bit master */
+u8 bf_master_8bit(u16 vol16);		/* 16-bit master -> 8-bit companion */
 int bf_gain_max_db(int mic);
 int bf_gain_db(int mic, u8 raw);	u8 bf_gain_raw(int mic, int db);
 
-/* ── babyfacepro-ctl.c ─────────────────────── */
+/* -- babyfacepro-ctl.c ----------------------- */
 int babyface_create_panel(struct snd_usb_babyface *chip);
 void babyface_panel_start(struct snd_usb_babyface *chip);
 void babyface_panel_stop(struct snd_usb_babyface *chip);
 void babyface_panel_work(struct work_struct *work);
 
-/* ── babyfacepro.c ──────────────────────── */
+/* -- babyfacepro.c ------------------------ */
 void bf_state_save(struct snd_usb_babyface *chip);
 int bf_state_restore(struct snd_usb_babyface *chip);
 void bf_state_purge(void);
