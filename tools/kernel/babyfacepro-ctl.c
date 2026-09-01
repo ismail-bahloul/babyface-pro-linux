@@ -11,6 +11,7 @@
  * state persistence, card lifecycle).
  */
 #include <linux/log2.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
@@ -299,6 +300,13 @@ static int bf_master_put(struct snd_kcontrol *kctl,
 	u16 r = ucontrol->value.integer.value[1];
 	u16 flag;
 	int ret = 0;
+
+	/* The control is declared 0..0x4000 (+6 dB); reject anything outside
+	 * so the 16-bit companion register and the cache stay in spec (the
+	 * ALSA core only enforces this with CONFIG_SND_CTL_INPUT_VALIDATION).
+	 */
+	if (l > 0x4000 || r > 0x4000)
+		return -EINVAL;
 
 	mutex_lock(&chip->mutex);
 	if (l == chip->master[out][0] && r == chip->master[out][1])
@@ -590,10 +598,10 @@ static int bf_pitch_put(struct snd_kcontrol *kctl,
 	/* The 0x1B DDS quad (16.8 fixed point, banked).  p is 0.1 % steps:
 	 * DDS_24 = round(50000·256/(1+p/1000)) = round(12800000000/(1000+p)).
 	 */
-	dds24 = (12800000000u + (u32)(1000 + p) / 2) / (u32)(1000 + p);
+	dds24 = div_u64(12800000000ULL + (u32)(1000 + p) / 2, 1000 + p);
 	dds16 = dds24 >> 8;
 	frac = dds24 & 0xff;
-	b1 = (u16)((dds16 * 72562ull + 50000) / 100000);
+	b1 = (u16)div_u64(dds16 * 72562ull + 50000, 100000);
 	b2 = (u16)((dds16 * 2 + 1) / 3);
 
 	ret = bf_vendor_write(chip, BF_REQ_DDS, (u16)dds16, (frac << 8) | 0);
@@ -1700,12 +1708,17 @@ static void bf_panel_balance_wheel(struct snd_usb_babyface *chip, int delta)
 {
 	int out = chip->panel_out == 3 ? 5 :
 		  chip->panel_out == 2 ? 1 : 0;
-	u16 l = chip->master[out][0];
-	u16 r = chip->master[out][1];
+	u16 l, r;
 	int bal;		/* −100..+100; + = image right (left varies) */
 	u16 fixed, varied;
 
 	mutex_lock(&chip->mutex);
+	/* Read under the lock so the L/R pair is consistent with the
+	 * master/mute/dim writers (they update chip->master[] under the
+	 * same mutex).
+	 */
+	l = chip->master[out][0];
+	r = chip->master[out][1];
 	/* Balance from the L/R ratio: the louder side is the fixed one. */
 	if (l >= r) {
 		bal = r ? -(100 - (100 * r) / l) : -100;
@@ -2316,7 +2329,7 @@ static s64 bf_exp2(s64 u)
 	int k;
 
 	for (k = 1; k <= 10; k++) {
-		term = ((term * rl + (1 << 26)) >> 27) / k;
+		term = div_s64((term * rl + (1 << 26)) >> 27, k);
 		e += term;
 	}
 	return n >= 0 ? e << n : e >> -n;
@@ -2351,7 +2364,7 @@ void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 	}
 
 	/* w0 = 2.pi.f/fs (Q27), reduced to [0, pi/2]. */
-	w0 = (f * BF_EQ_Q27) / fs;
+	w0 = div_s64(f * BF_EQ_Q27, fs);
 	w0 = (w0 * 0x3243F6A9) >> 27;	/* x 2.pi */
 	t = w0;
 	if (t > pi) {
@@ -2370,7 +2383,7 @@ void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 	if (cflip)
 		c = -c;
 
-	alpha = (s * 100 + q100) / (2 * (s64)q100);	/* sin(w0)/(2Q) */
+	alpha = div64_s64(s * 100 + q100, 2 * (s64)q100);	/* sin(w0)/(2Q) */
 	/* A = 10^(g/40), sqrt(A): g = gain_x10/10 dB */
 	A = bf_exp2((s64)gain_x10 * 0x11021E);
 	sq = bf_exp2((s64)gain_x10 * 0x8810F);
@@ -2381,9 +2394,9 @@ void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 		b0 = BF_EQ_Q27 + ta;
 		b1 = -2 * c;
 		b2 = BF_EQ_Q27 - ta;
-		a0 = BF_EQ_Q27 + (alpha * BF_EQ_Q27 + A / 2) / A;
+		a0 = BF_EQ_Q27 + div64_s64(alpha * BF_EQ_Q27 + A / 2, A);
 		a1 = -2 * c;
-		a2 = BF_EQ_Q27 - (alpha * BF_EQ_Q27 + A / 2) / A;
+		a2 = BF_EQ_Q27 - div64_s64(alpha * BF_EQ_Q27 + A / 2, A);
 	} else {
 		s64 ap1 = A + BF_EQ_Q27;
 		s64 am1 = A - BF_EQ_Q27;
@@ -2408,11 +2421,11 @@ void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 		}
 	}
 
-	w[0] = (s32)((a1 * BF_EQ_Q27 + a0 / 2) / a0);
-	w[1] = (s32)((a2 * BF_EQ_Q27 + a0 / 2) / a0);
-	w[2] = (s32)((b1 * BF_EQ_Q27 + b0 / 2) / b0);
-	w[3] = (s32)((b2 * BF_EQ_Q27 + b0 / 2) / b0);
-	w[4] = (s32)((b0 * BF_EQ_Q27 + a0 / 2) / a0);
+	w[0] = (s32)div64_s64(a1 * BF_EQ_Q27 + a0 / 2, a0);
+	w[1] = (s32)div64_s64(a2 * BF_EQ_Q27 + a0 / 2, a0);
+	w[2] = (s32)div64_s64(b1 * BF_EQ_Q27 + b0 / 2, b0);
+	w[3] = (s32)div64_s64(b2 * BF_EQ_Q27 + b0 / 2, b0);
+	w[4] = (s32)div64_s64(b0 * BF_EQ_Q27 + a0 / 2, a0);
 }
 
 /* ---- low cut ---- */
@@ -2625,7 +2638,6 @@ static int bf_eq_get(struct snd_kcontrol *kctl,
 
 	switch (param) {
 	case 0:
-		v = (s32 *)&e->on;
 		break;
 
 	case 1:
@@ -2660,7 +2672,9 @@ static int bf_eq_get(struct snd_kcontrol *kctl,
 		v = &e->slope_db;
 		break;
 	}
-	if (param == 14) {
+	if (param == 0) {
+		ucontrol->value.integer.value[0] = e->on;
+	} else if (param == 14) {
 		/* Inverse of put's index->dB map: slope_db stores the raw
 		 * 6/12/18/24 dB/oct value, but an ENUMERATED control's .get
 		 * must return the enum item index (0-3), same as .put
@@ -2671,8 +2685,11 @@ static int bf_eq_get(struct snd_kcontrol *kctl,
 		 */
 		s32 slope = v ? *v : 6;
 
-		ucontrol->value.integer.value[0] =
+		ucontrol->value.enumerated.item[0] =
 			slope >= 24 ? 3 : slope >= 18 ? 2 : slope >= 12 ? 1 : 0;
+	} else if (param == 1 || param == 2 || param == 3) {
+		/* ENUMERATED band type: use the enumerated union member. */
+		ucontrol->value.enumerated.item[0] = v ? *v : 0;
 	} else {
 		ucontrol->value.integer.value[0] = v ? *v : 0;
 	}
@@ -2687,13 +2704,61 @@ static int bf_eq_put(struct snd_kcontrol *kctl,
 	int param = EQ_PARAM(kctl->private_value);
 	struct bf_eq_channel *e = &chip->eq[strip];
 	int band = (param - 1) % 3;
-	s32 nv = (s32)ucontrol->value.integer.value[0];
+	s32 nv;
 	s32 *v = NULL;
 	int ret = 0;
 
+	/* Read from the union member matching the control type: ENUMERATED
+	 * params (band type 1-3, slope 14) use .enumerated.item, everything
+	 * else (BOOL 0, INTEGER) uses .integer.value.
+	 */
+	if (param == 1 || param == 2 || param == 3 || param == 14)
+		nv = (s32)ucontrol->value.enumerated.item[0];
+	else
+		nv = (s32)ucontrol->value.integer.value[0];
+
+	/* Validate against the bounds bf_eq_info() declares.  The ALSA core
+	 * only checks these when CONFIG_SND_CTL_INPUT_VALIDATION is set, so
+	 * an out-of-range value here could otherwise reach the Q27
+	 * coefficient math (bf_eq_band_words/bf_exp2) and shift by >= width
+	 * (undefined behaviour).
+	 */
 	switch (param) {
 	case 0:
-		v = (s32 *)&e->on;
+		if (nv < 0 || nv > 1)
+			return -EINVAL;
+		break;
+	case 1:
+	case 2:
+	case 3:
+	case 14:
+		if (nv < 0 || nv > 3)
+			return -EINVAL;
+		break;
+	case 4:
+	case 5:
+	case 6:
+	case 13:
+		if (nv < 0 || nv > 20000)
+			return -EINVAL;
+		break;
+	case 7:
+	case 8:
+	case 9:
+		if (nv < 5 || nv > 1000)
+			return -EINVAL;
+		break;
+	case 10:
+	case 11:
+	case 12:
+		if (nv < -240 || nv > 240)
+			return -EINVAL;
+		break;
+	}
+
+	switch (param) {
+	case 0:
+		v = NULL;
 		break;
 
 	case 1:
@@ -2732,7 +2797,13 @@ static int bf_eq_put(struct snd_kcontrol *kctl,
 		nv = nv == 0 ? 6 : nv == 1 ? 12 : nv == 2 ? 18 : 24;
 
 	mutex_lock(&chip->mutex);
-	if (v && *v != nv) {
+	if (param == 0) {
+		if (e->on != !!nv) {
+			e->on = !!nv;
+			bf_eq_update_strip(chip, strip);
+			ret = 1;
+		}
+	} else if (v && *v != nv) {
 		*v = nv;
 		bf_eq_update_strip(chip, strip);
 		ret = 1;

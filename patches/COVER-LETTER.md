@@ -6,7 +6,7 @@ and the maintainers from get_maintainer.pl (Jaroslav Kysela, Takashi
 Iwai). Re-run get_maintainer.pl just before mailing, entries change.
 
 From: Ismaïl Bahloul <i.bahloul01@gmail.com>
-Subject: [RFC PATCH 0/1] ALSA: usb: add RME Babyface Pro FS driver (proprietary mode)
+Subject: [RFC PATCH 0/4] ALSA: usb: add RME Babyface Pro FS driver (proprietary mode)
 
 ---
 
@@ -78,11 +78,31 @@ Known limitations, stated up front:
    USB Settings panel) is a post-merge follow-up.
 
 This is an RFC. I'm mainly after feedback on the interrupt-URB PCM
-design, the control naming and topology, the two-file split, and
-whether a subdirectory (sound/usb/babyfacepro/) is the right layout.
-I sent it as a single patch (4651 lines, 7 files) because that's how a
-wholesale new-driver addition is usually submitted, but I can split it
-into a series if that's preferred.
+design, the control naming and topology, the subdirectory layout
+(sound/usb/babyfacepro/), and the two-file structure.
+
+Per your note that splitting would help review, I've submitted this as
+a 4-patch series instead of one big patch. Each patch builds on its own
+(verified in-tree against linux-next):
+
+ - [1/4] core driver + PCM streaming (control surface stubbed)
+ - [2/4] the ALSA mixer (masters, crosspoints, gains, flags)
+ - [3/4] the front-panel poll + controls
+ - [4/4] the hardware DSP EQ
+
+The control surface in [1/4] is stubbed (not shipped as written) purely
+so the module links at each step; the final patch lands at the complete
+driver. Happy to re-cut the boundaries if you'd prefer a different
+granularity.
+
+Disclosure: the reverse-engineering (decoding the Windows USB
+captures, magic packets, and the hardware/front-panel behavior) and
+the substantial portions of the kernel implementation were written
+with heavy assistance from an AI coding assistant (DeepSeek V4 Flash,
+credited per patch as Assisted-by). The code was additionally re-
+reviewed by a separate AI pass for correctness and security issues.
+All of it was then verified by hand on real hardware; the human
+author remains responsible for the result via Signed-off-by.
 
 Thanks for reading,
 Ismaïl

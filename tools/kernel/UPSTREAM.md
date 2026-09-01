@@ -75,9 +75,12 @@ S:	Maintained
 F:	sound/usb/babyfacepro/
 ```
 
-The RFC-ready patch (`git format-patch` output of exactly this diff,
-built and verified against a real linux-next checkout — see item 7
-below) lives at `patches/0001-ALSA-usb-add-RME-Babyface-Pro-FS-driver-proprietary-.patch`.
+The RFC patch series (`git format-patch` output of exactly this
+diff, built and verified against a real linux-next checkout — see item
+7 below) lives at `patches/000[1-4]-*.patch`.  It is a 4-patch series:
+core+PCM, mixer, front panel, DSP EQ — each patch builds in-tree (the
+control surface is stubbed in patch 1 so the module links at every
+step).
 
 ## Before sending (reviewer will ask)
 
@@ -97,6 +100,12 @@ below) lives at `patches/0001-ALSA-usb-add-RME-Babyface-Pro-FS-driver-proprietar
    patch. This also matches common practice for a wholesale new-driver
    addition (nothing to bisect in code that doesn't exist yet). See
    the RFC patch at `patches/0001-...patch`.
+   REVISED 2026-09-01 after Takashi's review note that splitting would
+   help review: re-submitted as a **4-patch series** (core+PCM / mixer /
+   front panel / DSP EQ). Because the two files are cross-coupled, the
+   earlier patches carry stub control-surface functions (replaced by
+   the later patches) so every patch builds in-tree; each patch was
+   build-verified against linux-next. See `patches/000[1-4]-*.patch`.
 2. **`request_firmware`?** No — the device needs no firmware upload;
    the cold init is a fixed vendor-request burst (documented).
 3. **Suspend/resume + autosuspend**: S3 verified. USB autosuspend was

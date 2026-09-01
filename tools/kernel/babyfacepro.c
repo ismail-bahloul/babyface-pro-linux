@@ -11,6 +11,7 @@
  * panel, DSP EQ).
  */
 #include <linux/log2.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/unaligned.h>
@@ -246,8 +247,8 @@ int babyface_restore_state(struct snd_usb_babyface *chip)
 
 	/* Pitch (the DDS quad) + the clock keepalive. */
 	if (chip->pitch) {
-		u32 dds24 = (12800000000u + (u32)(1000 + chip->pitch) / 2) /
-			    (u32)(1000 + chip->pitch);
+		u32 dds24 = div_u64(12800000000ULL + (u32)(1000 + chip->pitch) / 2,
+				    1000 + chip->pitch);
 		u16 dds16 = dds24 >> 8;
 		u16 frac = dds24 & 0xff;
 
@@ -255,7 +256,7 @@ int babyface_restore_state(struct snd_usb_babyface *chip)
 		if (ret < 0)
 			return ret;
 		ret = bf_vendor_write(chip, BF_REQ_DDS,
-				      (u16)((dds16 * 72562ull + 50000) / 100000), 0x0001);
+				      (u16)div_u64(dds16 * 72562ull + 50000, 100000), 0x0001);
 		if (ret < 0)
 			return ret;
 		ret = bf_vendor_write(chip, BF_REQ_DDS, (u16)((dds16 * 2 + 1) / 3),
@@ -1124,10 +1125,6 @@ static int babyface_probe(struct usb_interface *intf,
 		return -ENODEV;
 	}
 
-	frames_per_urb = clamp(frames_per_urb, 8, 1024) & ~7;
-	nurbs = clamp(nurbs, 1, 16);
-	panel_poll_ms = clamp(panel_poll_ms, 10, 1000);
-
 	err = snd_card_new(&intf->dev, index[0], id[0], THIS_MODULE,
 			   sizeof(*chip), &card);
 	if (err < 0) {
@@ -1149,9 +1146,9 @@ static int babyface_probe(struct usb_interface *intf,
 	 */
 	usb_disable_autosuspend(chip->dev);
 	chip->iface = intf;
-	chip->nurbs = nurbs;
-	chip->frames_per_urb = frames_per_urb;
-	chip->panel_poll_ms = panel_poll_ms;
+	chip->nurbs = clamp(nurbs, 1, 16);
+	chip->frames_per_urb = clamp(frames_per_urb, 8, 1024) & ~7;
+	chip->panel_poll_ms = clamp(panel_poll_ms, 10, 1000);
 	chip->rate = 48000;
 	chip->alt = BF_ALT_1;
 	chip->frame_bytes = 56;
@@ -1316,6 +1313,11 @@ static int babyface_probe(struct usb_interface *intf,
 
 error:
 	usb_set_intfdata(intf, NULL);
+	/* Balance the probe()-time usb_disable_autosuspend(): disconnect()
+	 * is never called for a failed probe, so the disable would leak and
+	 * leave autosuspend off on this usb_device until a physical unplug.
+	 */
+	usb_enable_autosuspend(chip->dev);
 	snd_card_free(chip->card);
 	return err;
 }
