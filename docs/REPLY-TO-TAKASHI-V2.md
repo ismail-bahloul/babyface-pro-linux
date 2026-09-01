@@ -80,9 +80,13 @@ with several URBs in flight the device can transiently be ahead of the
 app ring at low periods, so we never copy frames past `appl_ptr` (that
 would trip a spurious XRUN); the device repeats the last frames.  The
 clamp is on the signed `appl - hw` difference because both counters are
-unbounded.  If you'd prefer the core XRUN to handle this case instead,
-I can drop the clamp and rely on the standard underrun path - say the
-word.
+unbounded.
+
+I'd like to keep it: without it the driver reports hw ahead of appl at
+low periods (16-128 frames with nurbs=16, the monitoring floor) and the
+core flags a spurious XRUN even though the app refills on schedule.  It
+is what keeps the low-latency sweep at 0 xruns.  If you still prefer the
+core underrun path to handle this, I'm happy to drop it - just say so.
 
 Thanks for the review,
 Ismaïl
