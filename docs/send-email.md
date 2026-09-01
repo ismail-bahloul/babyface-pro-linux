@@ -30,13 +30,13 @@ git config sendemail.from "Ismaïl Bahloul <i.bahloul01@gmail.com>"
 git config sendemail.confirm auto
 ```
 
-## Generate the series (threaded cover letter + patch)
+## Generate the series (threaded cover letter + 4 patches)
 
 From a linux-next checkout where the driver has been integrated
 (`sound/usb/babyfacepro/` + Makefile/Kconfig/MAINTAINERS):
 
 ```sh
-git format-patch --rfc -1 --cover-letter -o /tmp/rfcpatch/
+git format-patch --rfc -4 --cover-letter -o /tmp/rfcpatch/ origin/master..HEAD
 # edit /tmp/rfcpatch/0000-cover-letter.patch:
 #   replace "*** SUBJECT HERE ***" with the real subject
 #   replace "*** BLURB HERE ***" with the body (see patches/COVER-LETTER.md)
@@ -56,7 +56,11 @@ git send-email \
   --cc=tiwai@suse.com \
   --cc=linux-kernel@vger.kernel.org \
   /tmp/rfcpatch/0000-cover-letter.patch \
-  /tmp/rfcpatch/0001-ALSA-usb-add-RME-Babyface-Pro-FS-driver-proprietary-.patch
+  /tmp/rfcpatch/0001-ALSA-usb-add-RME-Babyface-Pro-FS-driver-proprietary-.patch \
+  /tmp/rfcpatch/0002-ALSA-usb-babyface-pro-add-the-mixer-control-surface.patch \
+  /tmp/rfcpatch/0003-ALSA-usb-babyface-pro-add-the-front-panel-poll-contr.patch \
+  /tmp/rfcpatch/0004-ALSA-usb-babyface-pro-add-the-hardware-DSP-EQ.patch
+```
 ```
 
 At the `Password for 'smtp.gmail.com':` prompt, paste the App Password
