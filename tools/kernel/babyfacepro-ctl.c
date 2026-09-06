@@ -687,6 +687,148 @@ out:
 	return ret;
 }
 
+/* bf_fader_raw_to_db2()/bf_fader_db2_to_raw() (the crosspoint fader
+ * curve) are defined further down in this file, alongside the
+ * front-panel wheel code that was their first user - forward-declared
+ * here rather than moved, to keep this diff to additions only.
+ */
+static int bf_fader_raw_to_db2(u16 raw);
+static u16 bf_fader_db2_to_raw(int db2);
+
+static int bf_trim_info(struct snd_kcontrol *kctl, struct snd_ctl_elem_info *uinfo);
+static int bf_trim_get(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol);
+static int bf_trim_put(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol);
+
+/* Input Trim (T button, AN1-4): PROTOCOL.md "Trim (T) write for the
+ * AN1/2 pair" (cap_trim2/3/4.pcap, hardware-verified) - the analog
+ * input's own gain-trim, applied through the crosspoint registers
+ * exactly like a fader (there is no separate trim register). Two
+ * different curves combine, matching tuxmix-usb's own already-shipped
+ * Rust implementation of this same capture: the low map holds the
+ * trim ALONE on the MASTER curve (0x2000 = 0 dB, `bf_master_16bit`);
+ * the standard map holds fader+trim SUMMED on the FADER curve
+ * (`bf_fader_db2_to_raw`). Always writes all 8 registers for the pair
+ * (both AN1+AN2 or both AN3+AN4 - TotalMix's own linked-strip
+ * behavior); `mic` may be either channel of the pair; the base is
+ * derived (`mic & ~1`) so the WRITE always lands on the correct pair's
+ * registers regardless of which channel's control triggered it -
+ * tuxmix-usb's own version instead assumes the caller always passes
+ * the pair's even index. Destination is always the AN1/2 monitor bus,
+ * matching set_ms_proc/set_cue/etc's own AN1/2-only scope (real
+ * TotalMix's Trim doesn't reach other outputs either, per the
+ * already-verified Rust reference).
+ *
+ * TWO KNOWN LIMITATIONS, kept rather than silently hidden:
+ * 1. Trim is a genuinely SHARED value per pair on real hardware (one
+ *    write always touches both channels' registers) but is exposed
+ *    here as 2 INDEPENDENT ALSA controls (one per channel, matching
+ *    `bf_gain_put`'s own per-mic pattern and this file's already-
+ *    shipped `InputChannel::trim` model, which is likewise
+ *    per-channel) - setting AN1's control then AN2's independently
+ *    doesn't fail, but the second write wins for BOTH channels on the
+ *    wire even though `chip->trim[]` still tracks them as if
+ *    independent. Not a new problem: `tuxmix-usb`'s own Rust model has
+ *    the identical characteristic already: kept for parity rather than
+ *    diverging from the reference this was ported from.
+ * 2. Same class as Phase (see `bf_phase_apply`'s own comment):
+ *    `chip->xpoint[0][mic][0]` is read here for the CURRENT fader
+ *    value but never written back - the standard-map register ends up
+ *    holding fader+trim while the cache still holds the plain fader,
+ *    so a later `bf_xpoint_put` on the same slot writes the plain
+ *    value, silently dropping trim from the combined register until
+ *    this is re-applied. Not fixed for the same reason Phase wasn't:
+ *    touches the shared 84-crosspoint write path, out of scope here.
+ */
+int bf_trim_apply(struct snd_usb_babyface *chip, int mic, int trim_db2)
+{
+	int base = mic & ~1;
+	int sib = base + 1;
+	const struct bf_source *sb = &bf_sources[base];
+	const struct bf_source *ss = &bf_sources[sib];
+	unsigned int blk = bf_xpoint_block[0]; /* AN1/2 output */
+	u16 trim_raw = bf_master_16bit(trim_db2);
+	int fader_db2 = bf_fader_raw_to_db2(chip->xpoint[0][base][0]);
+	u16 standard_raw = bf_fader_db2_to_raw(fader_db2 + trim_db2);
+	int ret;
+
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, trim_raw,
+			      BF_REG_LOWMAP_BASE_L + sb->idx_l);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, trim_raw,
+			      BF_REG_LOWMAP_BASE_R + sb->idx_r);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, trim_raw,
+			      BF_REG_LOWMAP_BASE_L + ss->idx_l);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, trim_raw,
+			      BF_REG_LOWMAP_BASE_R + ss->idx_r);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, standard_raw,
+			      (BF_REG_CROSS_BASE_L + BF_REG_CROSS_STRIDE * blk +
+			       sb->idx_l));
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, standard_raw,
+			      (BF_REG_CROSS_BASE_R + BF_REG_CROSS_STRIDE * blk +
+			       sb->idx_r));
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, standard_raw,
+			      (BF_REG_CROSS_BASE_L + BF_REG_CROSS_STRIDE * blk +
+			       ss->idx_l));
+	if (ret < 0)
+		return ret;
+	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, standard_raw,
+			       (BF_REG_CROSS_BASE_R + BF_REG_CROSS_STRIDE * blk +
+				ss->idx_r));
+}
+
+static int bf_trim_info(struct snd_kcontrol *kctl, struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+	uinfo->value.integer.min = -65;
+	uinfo->value.integer.max = 6;
+	uinfo->value.integer.step = 1;
+	return 0;
+}
+
+static int bf_trim_get(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	int mic = kctl->private_value;
+
+	ucontrol->value.integer.value[0] = chip->trim[mic];
+	return 0;
+}
+
+static int bf_trim_put(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	int mic = kctl->private_value;
+	int db = ucontrol->value.integer.value[0];
+	int ret = 0;
+
+	if (db < -65 || db > 6)
+		return -EINVAL;
+
+	mutex_lock(&chip->mutex);
+	if (db == chip->trim[mic])
+		goto out;
+	ret = bf_trim_apply(chip, mic, db * 2);
+	if (ret < 0)
+		goto out;
+	chip->trim[mic] = db;
+	ret = 1;
+out:
+	mutex_unlock(&chip->mutex);
+	return ret;
+}
+
 int babyface_create_xpoints(struct snd_usb_babyface *chip)
 {
 	struct snd_kcontrol *kctl;
@@ -745,6 +887,23 @@ int babyface_create_xpoints(struct snd_usb_babyface *chip)
 		}, chip);
 		strscpy(kctl->id.name, bf_sources[8 + src].name, sizeof(kctl->id.name));
 		strlcat(kctl->id.name, " Stereo Split Switch", sizeof(kctl->id.name));
+		err = snd_ctl_add(chip->card, kctl);
+		if (err < 0)
+			return err;
+	}
+
+	for (src = 0; src < 4; src++) {
+		kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+			.name = "Trim Volume",
+			.index = src,
+			.info = bf_trim_info,
+			.get = bf_trim_get,
+			.put = bf_trim_put,
+			.private_value = src,
+		}, chip);
+		strscpy(kctl->id.name, bf_sources[src].name, sizeof(kctl->id.name));
+		strlcat(kctl->id.name, " Trim Volume", sizeof(kctl->id.name));
 		err = snd_ctl_add(chip->card, kctl);
 		if (err < 0)
 			return err;

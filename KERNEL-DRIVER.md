@@ -181,6 +181,26 @@ first-impulse method.)  Full sweep `tools/kernel/latency-sweep.sh`:
      addresses (unchanged, just now named).
    - `sh selftests.sh`: laws + module build + `checkpatch` all still
      pass.
+   - **Input Trim** (`<name> Trim Volume`, AN1-4) added same day, the
+     last of the 5 upstream follow-ups — closes the list. Two curves
+     combine (matching `tuxmix-usb`'s own already-shipped Rust
+     reference, `cap_trim2/3/4.pcap`): the low map holds the trim ALONE
+     on the MASTER curve, the standard map holds fader+trim SUMMED on
+     the FADER curve (reused the existing static `bf_fader_raw_to_db2`/
+     `bf_fader_db2_to_raw` helpers already written for the front-panel
+     wheel, forward-declared rather than moved). Always writes all 8
+     registers for the pair; the pair base is derived (`mic & ~1`) so
+     the write lands correctly regardless of which channel's control
+     triggered it. Two known limitations kept, not hidden: (1) exposed
+     as 2 independent per-channel ALSA controls even though the
+     hardware register is genuinely shared per pair — matches
+     `tuxmix-usb`'s own per-channel `InputChannel::trim` model exactly,
+     not a new problem; (2) same composition gap as Phase — a later
+     fader move on the same crosspoint slot silently drops trim from
+     the combined register (out of scope, same reasoning). Hardware-
+     validated: round-trip via `amixer` (including a negative dB
+     value), no dmesg errors, correct persistence across unbind/rebind.
+     `sh selftests.sh`: laws + module build + `checkpatch` all pass.
 4. **Front panel** — DONE (2026-08-26, `panel.c`): the 0x17 readback is
    polled at 50 Hz in a delayed_work and mirrored into read-only ALSA
    controls (Front Panel Button/Wheel/In/Out/Mix/Dim).  What remains:

@@ -305,6 +305,10 @@ struct snd_usb_babyface {
 					 * comment for the known limitation
 					 * this implies.
 					 */
+	int trim[4];			/* Trim (T), dB (-65..+6), AN1-4;
+					 * same "wire-only" caveat as phase -
+					 * see bf_trim_apply's own comment.
+					 */
 	int pitch;			/* varispeed in 0.1% (-500..+500) */
 	bool loopback[6];
 	bool split[6];			/* stereo split, playback pairs PB1-PB6
@@ -383,6 +387,7 @@ struct bf_saved {
 	bool muted[6];
 	u16 xpoint[6][14][2];
 	bool phase[4];
+	int trim[4];
 	int pitch;
 	bool loopback[6];
 	bool split[6];
@@ -437,6 +442,7 @@ int bf_apply_masters(struct snd_usb_babyface *chip);
 int bf_loopback_write_map(struct snd_usb_babyface *chip, int out, bool on);
 int bf_phase_apply(struct snd_usb_babyface *chip, int mic, bool invert);
 int bf_split_apply(struct snd_usb_babyface *chip, int pb, bool split);
+int bf_trim_apply(struct snd_usb_babyface *chip, int mic, int trim_db2);
 int bf_preamp_state_write(struct snd_usb_babyface *chip);
 int babyface_create_controls(struct snd_usb_babyface *chip);
 int babyface_create_xpoints(struct snd_usb_babyface *chip);

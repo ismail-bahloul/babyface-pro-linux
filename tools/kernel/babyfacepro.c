@@ -430,6 +430,22 @@ int bf_state_apply_flags(struct snd_usb_babyface *chip)
 				return ret;
 		}
 	}
+
+	/* Re-apply any non-zero Trim (fader+trim combined, same reasoning
+	 * as phase - see bf_trim_apply's own comment). Only the pair's
+	 * even index needs to fire this (it always writes both channels).
+	 */
+	{
+		int mic;
+
+		for (mic = 0; mic < 4; mic += 2) {
+			if (!chip->trim[mic] && !chip->trim[mic + 1])
+				continue;
+			ret = bf_trim_apply(chip, mic, chip->trim[mic] * 2);
+			if (ret < 0)
+				return ret;
+		}
+	}
 	return 0;
 }
 
@@ -465,6 +481,7 @@ void bf_state_save(struct snd_usb_babyface *chip)
 	memcpy(s->muted, chip->muted, sizeof(s->muted));
 	memcpy(s->xpoint, chip->xpoint, sizeof(s->xpoint));
 	memcpy(s->phase, chip->phase, sizeof(s->phase));
+	memcpy(s->trim, chip->trim, sizeof(s->trim));
 	s->pitch = chip->pitch;
 	memcpy(s->loopback, chip->loopback, sizeof(s->loopback));
 	memcpy(s->split, chip->split, sizeof(s->split));
@@ -502,6 +519,7 @@ int bf_state_restore(struct snd_usb_babyface *chip)
 		memcpy(chip->muted, s->muted, sizeof(chip->muted));
 		memcpy(chip->xpoint, s->xpoint, sizeof(chip->xpoint));
 		memcpy(chip->phase, s->phase, sizeof(chip->phase));
+		memcpy(chip->trim, s->trim, sizeof(chip->trim));
 		chip->pitch = s->pitch;
 		memcpy(chip->loopback, s->loopback, sizeof(chip->loopback));
 		memcpy(chip->split, s->split, sizeof(chip->split));
