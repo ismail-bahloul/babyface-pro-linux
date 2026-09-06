@@ -118,12 +118,69 @@ first-impulse method.)  Full sweep `tools/kernel/latency-sweep.sh`:
   (AN1/2 → words 0/1 = capture ch0/1; the words 12/13 = ch10/11 are a
   separate fixed-gain playback tap used as the latency anchor — see
   the Loopback section of PROTOCOL.md).
+
+  **REVISED 2026-09-06 (empirical, from TuxMix's VU-metering work):**
+  the "ch10/11 = a separate, independent fixed-gain playback tap"
+  framing above doesn't hold as stated. Test: routed a live mic signal
+  (AN1) into the PH3/4 output bus via its own crosspoint (`amixer
+  'AN1',14` → 100%), engaged `Loopback,1` (PH3/4), and captured all 12
+  channels (`arecord -D hw:0 -f S32_LE -c 12 -r 48000`) while tapping
+  the mic. Per-100ms-block peak analysis across an 8s capture: **ch2
+  and ch3 track ch0 (AN1) exactly, sample-for-sample, at a fixed +3dB
+  offset, every single block** — solid confirmation of the "words
+  2×out" formula for PH3/4 (output pair 1, 2×1 = words 2/3). **ch11
+  tracked the same signal just as tightly** — not independent of the
+  looped-back output at all in this test. ch10 showed only a much
+  weaker, inconsistent correlation (near noise floor, one early
+  transient), unlike ch2/3/11's rock-solid match. Only one output
+  pair/source combination was tested (PH3/4 loopback, AN1 as source) —
+  not enough to fully re-derive what ch10/11 actually is, just enough
+  to say "independent fixed-gain latency anchor" isn't it. Worth a
+  proper re-investigation (try looping a *different* output pair, and/
+  or actual software playback instead of an input→output loopback, to
+  see whether ch11 tracks the specific looped bus or something more
+  global like "whatever's currently on the primary monitor path").
 2. **Multi-channel PCM**: expose the full 14-channel frame (PB1-6
    playback, AN1-4 + ADAT/SPDIF capture) instead of 2 ch.
 3. **Full control set**: crosspoints (the TotalMix matrix ~hundreds of
-   controls), EQ bulk uploads (0x0A) — DONE, pitch/varispeed (0x1B DDS
-   quads), loopback/MS/AN1>2/width/split flags, ref levels, clock
-   source keepalive (0x10 0x05CF).
+   controls), EQ bulk uploads (0x0A), pitch/varispeed (0x1B DDS quads),
+   loopback/MS/AN1>2/width flags — ALL DONE. **2026-09-06: the
+   remaining 4 (stereo split, ref level, clock source keepalive, phase
+   invert) are now done too**, hardware-validated on the real card
+   (round-trip via `amixer` + survives an unbind/rebind cycle):
+   - **Clock source** (`Sample Clock Source` enum, Internal/Optical In)
+     — matches the name TuxMix's ALSA backend already looked for, zero
+     Rust-side changes needed. Along the way, fixed 3 call sites that
+     hardcoded the keepalive word to `0x0001` ("always Internal") —
+     composed from tracked state now (`bf_settings_write`), or Optical
+     would have silently reverted on the next pitch change or PM
+     resume.
+   - **Ref level** (`Instrument Ref Level` enum, +4dBu/-10dBV/Boost) —
+     a single shared switch for the Instrument pair, not per-channel
+     (no separate bits exist for IN3 vs IN4). Boost's distinguishing
+     0x21 commit value (0x0003) is a one-shot, not a persisted register
+     bit — `bf_preamp_state_write` now re-asserts it on every preamp
+     write (any phantom/PAD toggle included), or Boost would silently
+     degrade to plain -10dBV the next time anything else touched the
+     shared preamp byte.
+   - **Phase invert** (`<mic> Phase Switch`, AN1-4) — bitwise-NOT of
+     the crosspoint value, all 6 outputs + the AN1/2 low-map shadow.
+     **Known limitation, same class as TuxMix's own `usb.rs::set_phase`
+     (not fixed there either)**: this negates the *current* crosspoint
+     value once, at toggle time — a later fader move on the same
+     [out][mic] slot writes the plain value, silently un-inverting
+     phase. Making the crosspoint hot path itself phase-aware would
+     close this properly; out of scope for this pass (touches all 84
+     crosspoint controls' write path), flagged rather than silently
+     shipped.
+   - **Stereo split** (`<PBx> Stereo Split Switch`) — fixed constants
+     (no fader dependency, unlike phase), AN1/2 destination only, same
+     scope as CUE/mute/solo's own low-map reach.
+   - New `BF_REG_LOWMAP_BASE_L`/`_R` constants generalize the low-map
+     addressing MS-proc/width already used ad-hoc with hardcoded
+     addresses (unchanged, just now named).
+   - `sh selftests.sh`: laws + module build + `checkpatch` all still
+     pass.
 4. **Front panel** — DONE (2026-08-26, `panel.c`): the 0x17 readback is
    polled at 50 Hz in a delayed_work and mirrored into read-only ALSA
    controls (Front Panel Button/Wheel/In/Out/Mix/Dim).  What remains:
@@ -131,6 +188,15 @@ first-impulse method.)  Full sweep `tools/kernel/latency-sweep.sh`:
    host is in the loop, like TotalMix).
 5. **PM hardening**: full suspend/resume with mixer-state restore
    (device has no readback for faders — mirror TotalMix's re-apply).
+   **Flagged, not diagnosed (2026-09-06)**: during the ref-level
+   testing above, `Phantom Power Mic 1` read back "on" after an
+   unbind/rebind cycle where it should have been "off" per the state
+   that was current right before the unbind (verified via `amixer`
+   immediately before). Not reproduced deliberately / root-caused —
+   could be an ordering issue in the restore path, or unrelated to
+   this session's changes entirely (nothing here touches phantom's own
+   save/restore). Worth a dedicated repro pass before relying on
+   `--mixer-restore` for phantom power specifically.
 6. **PipeWire**: the kernel card should replace the tuxmix ALSA plugin
    as the system sink/source (PW resamples; the mixer stays in TuxMix).
    **Status 2026-08-24 (retested)**: the PW SINK works (tone heard via

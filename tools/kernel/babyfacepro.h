@@ -112,8 +112,30 @@
 #define BF_REG_CROSS_BASE_L		0x0034	/* + 0x34*out + src (bReq 0x12) */
 #define BF_REG_CROSS_BASE_R		0x004e	/* + 0x34*out + src */
 #define BF_REG_CROSS_STRIDE		0x0034
+/* Low map (the AN1/2 monitor bus's own per-source registers, one set
+ * shared across every output - not one per output block like the
+ * standard crosspoint map above). Used ad-hoc today by bf_ms_put/
+ * width's own hardcoded addresses; named here for stereo split, which
+ * needs the general form. PROTOCOL.md / tuxmix-usb's `map::low_map_l`/
+ * `low_map_r` (hardware-verified) use the identical BASE + idx shape.
+ */
+#define BF_REG_LOWMAP_BASE_L		0x0000	/* + idx_l */
+#define BF_REG_LOWMAP_BASE_R		0x001a	/* + idx_r */
 #define BF_REG_KEEPALIVE_SETTINGS	0x05cf
 #define BF_REG_KEEPALIVE_INIT		0x05ff
+
+/* Host settings-state word carried by the BF_REG_KEEPALIVE_SETTINGS
+ * keepalive (PROTOCOL.md "keepalive 0x10 0x05CF wVal = host settings-
+ * state register", hardware-verified 2026-08-22/23): clock source is
+ * NOT a register write at all, only this flag word changes.  Bit 2 =
+ * clock Optical (bit clear = Internal, the default); bits 6/10 (EQ for
+ * Record / Optical-Out SPDIF) are next in the driver's own upstream
+ * follow-up list, not wired to a control yet - the composer below only
+ * OR's in the clock bit today, structured so those can be added the
+ * same way later without another flag-stomping rewrite.
+ */
+#define BF_SETTINGS_CLOCK_INTERNAL	0x0001
+#define BF_SETTINGS_CLOCK_OPTICAL	0x0004
 
 /* The "cross" register block within each output: the L-registers sit at
  * odd offsets 5..23 and the R-registers at even offsets 4..22 (the stereo
@@ -163,11 +185,27 @@
  * which is correct for the driver (no ref-level control).
  */
 #define BF_PREAMP_REF_4DBU		0x000c
+#define BF_PREAMP_REF_MASK		0x000c
 #define BF_PREAMP_BASE			BF_PREAMP_REF_4DBU
 #define BF_PREAMP_48V_MIC1		0x0001
 #define BF_PREAMP_48V_MIC2		0x0002
 #define BF_PREAMP_PAD_MIC1		0x0010
 #define BF_PREAMP_PAD_MIC2		0x0020
+
+/* Ref Level (Instr 3/4) - PROTOCOL.md "Ref level (Instr 3/4) - LABELED"
+ * (cap_reflevel2.pcap, hardware-verified): a single shared 3-state
+ * switch for the Instrument pair (there is no per-mic pair of
+ * constants the way 48V/PAD have _MIC1/_MIC2 - only one field in the
+ * shared preamp byte). +4dBu/-10dBV are bits 2-3 of that byte
+ * (BF_PREAMP_REF_MASK); Boost shares -10dBV's bits and is
+ * distinguished only by the 0x21 commit value (0x0003, not the usual
+ * 0x0000) - not a persisted register bit, so it must be tracked
+ * host-side (chip->ref_level below) and re-asserted on every preamp
+ * write, not just the one that engaged it (see bf_preamp_state_write).
+ */
+#define BF_REF_LEVEL_4DBU		0
+#define BF_REF_LEVEL_MINUS10DBV		1
+#define BF_REF_LEVEL_BOOST		2
 
 /* Calibrated master value: 0 dB = 0x2000 (+6 dB = 0x4000).  See
  * CALIBRATION.md.  The crosspoint fader curve is DIFFERENT (0 dB =
@@ -260,11 +298,27 @@ struct snd_usb_babyface {
 	u16 dim_saved[2];		/* pre-DIM Phones master (out 1 L/R) */
 	bool dim;			/* DIM engaged (fixed -20 dB on Phones) */
 	u16 xpoint[6][14][2];		/* cached crosspoints (out, src, L/R) */
+	bool phase[4];			/* Ø invert, AN1-4 (bf_sources idx 0-3);
+					 * xpoint[][0..3][0] stays the PLAIN
+					 * value, only the wire write is
+					 * negated - see bf_phase_put's own
+					 * comment for the known limitation
+					 * this implies.
+					 */
 	int pitch;			/* varispeed in 0.1% (-500..+500) */
 	bool loopback[6];
+	bool split[6];			/* stereo split, playback pairs PB1-PB6
+					 * (bf_sources idx 8-13); fixed
+					 * constants (PROTOCOL.md "Stereo
+					 * split"), not derived from the
+					 * fader - xpoint[][] is left
+					 * untouched, same as phase.
+					 */
 	bool an12;			/* AN 1>2 copy */
 	bool linked;			/* AN1/2 input link */
 	bool ms_proc;			/* MS processor engaged */
+	bool clock_optical;		/* clock source: false = Internal (default) */
+	int ref_level;			/* Instr 3/4 ref level, BF_REF_LEVEL_* (0 = +4dBu default) */
 	int width;			/* width knob -100..+100 */
 	u16 fx_send;			/* FX send level 0..0x1000 */
 
@@ -328,11 +382,15 @@ struct bf_saved {
 	u16 master[6][2];
 	bool muted[6];
 	u16 xpoint[6][14][2];
+	bool phase[4];
 	int pitch;
 	bool loopback[6];
+	bool split[6];
 	bool an12;
 	bool linked;
 	bool ms_proc;
+	bool clock_optical;
+	int ref_level;
 	int width;
 	u16 fx_send;
 	bool dim;
@@ -362,6 +420,7 @@ extern const struct snd_pcm_hw_constraint_list bf_rates_constraint;
 
 /* -- babyfacepro.c ------------------------ */
 int bf_vendor_write(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx);
+int bf_settings_write(struct snd_usb_babyface *chip);
 int bf_vendor_write_cycle(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx);
 int bf_vendor_read(struct snd_usb_babyface *chip, u8 req, u16 idx, u8 *buf);
 int bf_cold_init(struct snd_usb_babyface *chip);
@@ -376,6 +435,8 @@ void babyface_stream_work(struct work_struct *work);
 int babyface_write_default_mixer(struct snd_usb_babyface *chip);
 int bf_apply_masters(struct snd_usb_babyface *chip);
 int bf_loopback_write_map(struct snd_usb_babyface *chip, int out, bool on);
+int bf_phase_apply(struct snd_usb_babyface *chip, int mic, bool invert);
+int bf_split_apply(struct snd_usb_babyface *chip, int pb, bool split);
 int bf_preamp_state_write(struct snd_usb_babyface *chip);
 int babyface_create_controls(struct snd_usb_babyface *chip);
 int babyface_create_xpoints(struct snd_usb_babyface *chip);

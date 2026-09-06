@@ -84,6 +84,26 @@ int bf_vendor_read(struct snd_usb_babyface *chip, u8 req, u16 idx, u8 *buf)
 				    0, idx, buf, 4, BF_CTL_TIMEOUT, GFP_KERNEL);
 }
 
+/* Composes and sends the BF_REG_KEEPALIVE_SETTINGS word from every
+ * currently-tracked flag together (PROTOCOL.md: "keepalive 0x10 0x05CF
+ * wVal = host settings-state register" - a single shared word, not
+ * independent per-setting writes).  Only clock source is tracked so
+ * far; the single call site this replaces (which used to hardcode
+ * 0x0001, i.e. "always Internal") is why this exists as its own
+ * function rather than an inline write at each call site - the next
+ * flag added to this word (EQ for Record / Optical-Out SPDIF, this
+ * driver's own upstream follow-up list) just OR's in here too, instead
+ * of every caller needing to remember every other bit.
+ */
+int bf_settings_write(struct snd_usb_babyface *chip)
+{
+	u16 w = chip->clock_optical ? BF_SETTINGS_CLOCK_OPTICAL :
+				       BF_SETTINGS_CLOCK_INTERNAL;
+
+	return bf_vendor_write(chip, BF_REQ_KEEPALIVE, w,
+			       BF_REG_KEEPALIVE_SETTINGS);
+}
+
 /* Write with the per-transaction flag-cycle word OR'd into idx.  The
  * device wants the flag word (0xc000/0x4000/0x8000/0x0000, rotating)
  * set on every 0x12/0x1a write; this is the hot path for the mixer
@@ -278,8 +298,7 @@ int babyface_restore_state(struct snd_usb_babyface *chip)
 		if (ret < 0)
 			return ret;
 	}
-	return bf_vendor_write(chip, BF_REQ_KEEPALIVE, 0x0001,
-			       BF_REG_KEEPALIVE_SETTINGS);
+	return bf_settings_write(chip);
 }
 
 /* Re-apply the non-master flags (loopback / AN1>2 / link / width /
@@ -379,6 +398,38 @@ int bf_state_apply_flags(struct snd_usb_babyface *chip)
 		if (ret < 0)
 			return ret;
 	}
+
+	/* Re-apply any engaged Phase invert - the crosspoint restore loop
+	 * above already re-wrote xpoint[][] as PLAIN values, so a phase
+	 * negation needs to be re-asserted on top, the same way the ON
+	 * state itself is applied (bf_phase_apply).
+	 */
+	{
+		int mic;
+
+		for (mic = 0; mic < 4; mic++) {
+			if (!chip->phase[mic])
+				continue;
+			ret = bf_phase_apply(chip, mic, true);
+			if (ret < 0)
+				return ret;
+		}
+	}
+
+	/* Re-apply any engaged stereo split (fixed constants, no fader
+	 * dependency - see bf_split_apply's own comment).
+	 */
+	{
+		int pb;
+
+		for (pb = 0; pb < 6; pb++) {
+			if (!chip->split[pb])
+				continue;
+			ret = bf_split_apply(chip, pb, true);
+			if (ret < 0)
+				return ret;
+		}
+	}
 	return 0;
 }
 
@@ -413,11 +464,15 @@ void bf_state_save(struct snd_usb_babyface *chip)
 	memcpy(s->master, chip->master, sizeof(s->master));
 	memcpy(s->muted, chip->muted, sizeof(s->muted));
 	memcpy(s->xpoint, chip->xpoint, sizeof(s->xpoint));
+	memcpy(s->phase, chip->phase, sizeof(s->phase));
 	s->pitch = chip->pitch;
 	memcpy(s->loopback, chip->loopback, sizeof(s->loopback));
+	memcpy(s->split, chip->split, sizeof(s->split));
 	s->an12 = chip->an12;
 	s->linked = chip->linked;
 	s->ms_proc = chip->ms_proc;
+	s->clock_optical = chip->clock_optical;
+	s->ref_level = chip->ref_level;
 	s->width = chip->width;
 	s->fx_send = chip->fx_send;
 	s->dim = chip->dim;
@@ -446,11 +501,15 @@ int bf_state_restore(struct snd_usb_babyface *chip)
 		memcpy(chip->master, s->master, sizeof(chip->master));
 		memcpy(chip->muted, s->muted, sizeof(chip->muted));
 		memcpy(chip->xpoint, s->xpoint, sizeof(chip->xpoint));
+		memcpy(chip->phase, s->phase, sizeof(chip->phase));
 		chip->pitch = s->pitch;
 		memcpy(chip->loopback, s->loopback, sizeof(chip->loopback));
+		memcpy(chip->split, s->split, sizeof(chip->split));
 		chip->an12 = s->an12;
 		chip->linked = s->linked;
 		chip->ms_proc = s->ms_proc;
+		chip->clock_optical = s->clock_optical;
+		chip->ref_level = s->ref_level;
 		chip->width = s->width;
 		chip->fx_send = s->fx_send;
 		chip->dim = s->dim;
