@@ -140,8 +140,16 @@ first-impulse method.)  Full sweep `tools/kernel/latency-sweep.sh`:
   or actual software playback instead of an input→output loopback, to
   see whether ch11 tracks the specific looped bus or something more
   global like "whatever's currently on the primary monitor path").
-2. **Multi-channel PCM**: expose the full 14-channel frame (PB1-6
-   playback, AN1-4 + ADAT/SPDIF capture) instead of 2 ch.
+2. **Multi-channel PCM** — DONE (see the status table above:
+   `channels_max = 12`, 12-ch capture + playback hardware-verified,
+   marker words skipped). This entry was stale — left listed as an
+   open gap for a while after the table above had already marked it
+   done, caught 2026-09-07 while cross-checking the two against each
+   other. Originally described as "the full 14-channel frame"; what
+   actually shipped is 12 (AN1-4 + the 8 ADAT words) — SPDIF isn't a
+   separately addressable pair of PCM channels in the captured
+   protocol, so 12 is the real ceiling here, not a shortfall against
+   14.
 3. **Full control set**: crosspoints (the TotalMix matrix ~hundreds of
    controls), EQ bulk uploads (0x0A), pitch/varispeed (0x1B DDS quads),
    loopback/MS/AN1>2/width flags — ALL DONE. **2026-09-06: the
@@ -208,15 +216,37 @@ first-impulse method.)  Full sweep `tools/kernel/latency-sweep.sh`:
    host is in the loop, like TotalMix).
 5. **PM hardening**: full suspend/resume with mixer-state restore
    (device has no readback for faders — mirror TotalMix's re-apply).
-   **Flagged, not diagnosed (2026-09-06)**: during the ref-level
-   testing above, `Phantom Power Mic 1` read back "on" after an
-   unbind/rebind cycle where it should have been "off" per the state
-   that was current right before the unbind (verified via `amixer`
-   immediately before). Not reproduced deliberately / root-caused —
-   could be an ordering issue in the restore path, or unrelated to
-   this session's changes entirely (nothing here touches phantom's own
-   save/restore). Worth a dedicated repro pass before relying on
-   `--mixer-restore` for phantom power specifically.
+   **Root-caused 2026-09-07 (not a driver bug)**: the anomaly flagged
+   2026-09-06 — `Phantom Power Mic 1` reading back "on" after an
+   unbind/rebind where it should have been "off" — reproduced
+   consistently (2/2) with temporary `dev_info` tracing added at
+   `bf_state_save`, the probe-time `0x17` readback, and right after
+   `bf_state_restore` returns. The trace showed `chip->preamp` staying
+   correctly `0x0000` (off) through every stage of the driver's OWN
+   save/restore path, and confirmed `bf_panel_set_phantom` (the
+   front-panel SET-press handler, the other candidate) never fired.
+   The actual cause is external to this driver entirely: udev's stock
+   `90-alsa-restore.rules` runs `alsactl restore` on every card
+   (re)appearance — including every unbind/rebind — from
+   `/var/lib/alsa/asound.state`, which still had `Phantom Power Mic 1`
+   (index 0) stored as `true` from earlier the same session (set via
+   `amixer` during testing, never persisted with a matching `alsactl
+   store`). Confirmed the fix: `sudo alsactl store` to sync the state
+   file, then re-ran the same unbind/rebind cycle for both an off case
+   and an on case — both restored correctly, proving the driver's own
+   `bf_state_save`/`bf_state_restore` mechanism was never broken.
+   **Practical implication**: `--mixer-restore` testing should
+   `alsactl store` first, or a stale system-wide state file will look
+   exactly like a driver bug — `regress.sh` *already* does exactly
+   this (see its own `--mixer-restore` section, dated 2026-08-26, same
+   root cause documented there already). The 2026-09-06 flag was raised
+   from an ad-hoc manual `amixer` test that skipped that step, not from
+   `regress.sh` itself; cross-checking existing knowledge before
+   treating this as a fresh mystery would have caught it immediately.
+   A real end user hitting this would only be affected by their OWN
+   stale `asound.state`, same as any other ALSA device — not specific
+   to this driver. Diagnostic `dev_info` calls were removed after
+   confirming the root cause (not left in the shipped driver).
 6. **PipeWire**: the kernel card should replace the tuxmix ALSA plugin
    as the system sink/source (PW resamples; the mixer stays in TuxMix).
    **Status 2026-08-24 (retested)**: the PW SINK works (tone heard via
