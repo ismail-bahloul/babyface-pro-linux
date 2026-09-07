@@ -65,6 +65,7 @@ libasound_module_pcm_tuxmix.so  ← PipeWire via spa-alsa (sink/source)
 | Mixer-state persistence across interface re-probes (usbfs claim → detach → re-probe restores 48V/gains/crosspoints/pitch/flags) | ✅ 2026-08-24 |
 | PM: suspend/resume with full cached-state restore (cold init + mixer re-apply) | ✅ |
 | checkpatch | ✅ 0 errors / 0 warnings |
+| Packaging: DKMS (survives kernel upgrades, no manual rebuild) | ✅ 2026-09-07 — `tools/kernel/dkms.conf` + `aur/snd-usb-babyface-pro-dkms/PKGBUILD`; tries plain `make` first, falls back to `LLVM=1 CC=clang` for clang-built kernels (CachyOS). Hardware-validated: built, installed, MOK-signed, and reloaded live via `dkms build`/`install` + `modprobe` on the dev box — all recent controls (Clock Source, Ref Level, Phase, Split, Trim) confirmed present via `amixer` after the DKMS-managed reload |
 
 Hardware test results (2026-08-24, live card):
 - 440 Hz playback heard on PH3/4; master mute/unmute verified by ear.

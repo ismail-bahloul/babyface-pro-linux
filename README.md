@@ -43,6 +43,24 @@ kHz, 0 xruns) that Windows cannot match (its floor is 46 samples).
 
 ## Build & load
 
+**DKMS (recommended)** — survives kernel upgrades without a manual
+rebuild. Arch/CachyOS: `aur/snd-usb-babyface-pro-dkms/` has a PKGBUILD
+(`makepkg -si` after installing the matching `*-headers` package for
+your kernel). Manually, on any distro with `dkms` installed:
+
+```sh
+sudo cp -r tools/kernel /usr/src/snd-usb-babyface-pro-0.1.0
+# dkms.conf ships inside tools/kernel/, no extra copy needed
+sudo dkms add -m snd-usb-babyface-pro -v 0.1.0
+sudo dkms install -m snd-usb-babyface-pro -v 0.1.0
+sudo modprobe snd-usb-babyface-pro
+```
+
+`dkms.conf` tries a plain build first and falls back to `LLVM=1` for
+clang-built kernels (CachyOS and similar) automatically.
+
+**Manual (one-off, doesn't survive a kernel upgrade)**:
+
 ```sh
 cd tools/kernel
 make LLVM=1 -C /lib/modules/$(uname -r)/build M=$PWD modules
