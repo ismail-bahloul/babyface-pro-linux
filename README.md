@@ -1,133 +1,87 @@
-# snd-usb-babyface-pro: Linux driver for the RME Babyface Pro FS (proprietary mode)
+<div align="center">
 
-A from-scratch Linux kernel driver for the **RME Babyface Pro FS**
-audio interface running in its **proprietary USB mode**
-(`VID:PID 2a39:3fc0`), reverse-engineered from Windows captures and
-validated on real hardware.  The goal is a production-quality driver
-worth proposing to the Linux kernel (`linux-usb` / ALSA).
+# snd-usb-babyface-pro
 
-## Why proprietary mode?
+**A Linux ALSA driver for the RME Babyface Pro FS, running in its proprietary USB mode.**
 
-The device presents two USB personalities:
+<code>VID:PID 2a39:3fc0</code> · reverse-engineered from Windows captures · validated on real hardware
 
-- a **class-compliant** one handled by the stock `snd-usb-audio`, and
-- the **proprietary** one (`2a39:3fc0`) whose PCM stream runs on
-  *interrupt* endpoints (interface 5) and whose mixer/DSP is a
-  vendor-control surface (the TotalMix-class control set).
+**Hardware-validated** **&nbsp;·&nbsp;** **checkpatch / sparse / W=1 clean** **&nbsp;·&nbsp;** **40/40 regression suite** **&nbsp;·&nbsp;** **0.33 ms latency floor**
 
-The proprietary mode is the interesting one: it exposes the full
-channel count and the hardware DSP mixer, and with this driver it
-reaches a streaming latency floor of **0.33 ms** (16-frame URBs @ 48
-kHz, 0 xruns) that Windows cannot match (its floor is 46 samples).
+</div>
 
-## Status
+---
 
-**Hardware-validated** on the Babyface Pro FS (2026-08):
+## What it is
 
-- **Streaming**: 32–192 kHz, 2–12 channels, interrupt-URB, full-duplex;
-  period floor 16 frames (0.33 ms), zero xruns across the sweep
-- **Mixer** (ALSA controls): 6 output masters + mutes, the full
-  6×14 crosspoint matrix, 4 preamp gains (two laws: mic 3.25 dB/step,
-  instrument 0.5 dB/step), phantom power + PAD, pitch/varispeed,
-  loopback (30-ch map), width, FX send, MS processing, input link,
-  AN 1>2
-- **Front panel fully emulated** (the host is "in the loop" like
-  TotalMix): IN/OUT/MIX/SELECT/DIM buttons, the wheel in gain /
-  volume / MIX-monitoring / balance modes, the MIX-mode VU display,
-  SET = phantom toggle
-- **PM**: suspend/resume with mixer-state restore
-- **Automated checks**: `regress.sh` passes 40/40 on hardware (rate ×
-  period sweep with 0 xruns, start/stop stress, mixer-restore across
-  unbind/rebind, disconnect mid-stream); `selftests.sh` runs the law
-  selftests, the build, and checkpatch without the card
+A from-scratch kernel driver that brings the **full channel count** and the **hardware DSP mixer** of the Babyface Pro FS to Linux — in its proprietary USB mode, which a stock `snd-usb-audio` cannot touch. Modeled on `snd-usb-caiaq`, the in-tree precedent for interrupt-based USB audio.
 
-## Build & load
+The proprietary mode runs the PCM stream on interrupt endpoints (interface 5) and exposes the TotalMix-class control surface as a normal ALSA mixer, reaching a **0.33 ms** streaming floor (16-frame URBs @ 48 kHz) that Windows cannot match.
 
-**DKMS (recommended)** — survives kernel upgrades without a manual
-rebuild. Arch/CachyOS: `aur/snd-usb-babyface-pro-dkms/` has a PKGBUILD
-(`makepkg -si` after installing the matching `*-headers` package for
-your kernel). Manually, on any distro with `dkms` installed:
+> **Related project:** the companion user-space mixer app lives in the sibling repo **[TuxMix](https://github.com/ismail-bahloul/TuxMix)** (control stack + GUI/TUI).
+
+## Get started
+
+The card works like any other ALSA / PipeWire device once loaded.
 
 ```sh
+# DKMS (recommended — survives kernel upgrades). Arch/CachyOS:
+cd aur/snd-usb-babyface-pro-dkms && makepkg -si
+# ...or any distro with dkms installed (dkms.conf ships in tools/kernel/):
 sudo cp -r tools/kernel /usr/src/snd-usb-babyface-pro-0.1.0
-# dkms.conf ships inside tools/kernel/, no extra copy needed
-sudo dkms add -m snd-usb-babyface-pro -v 0.1.0
+sudo dkms add    -m snd-usb-babyface-pro -v 0.1.0
 sudo dkms install -m snd-usb-babyface-pro -v 0.1.0
 sudo modprobe snd-usb-babyface-pro
 ```
 
-`dkms.conf` tries a plain build first and falls back to `LLVM=1` for
-clang-built kernels (CachyOS and similar) automatically.
+Then the mixer is the normal ALSA control set: `amixer -c <n> controls`.
 
-**Manual (one-off, doesn't survive a kernel upgrade)**:
+> **Low-latency profile:** load with `frames_per_urb=16 nurbs=16` for the 0.33 ms monitoring floor (the default is the TotalMix-parity 256 samples). To switch profiles you currently reload the module.
+> **Full build / load / test walkthrough** (manual build, hardware checks, front-panel probes) → **[`LINUX-TEST.md`](LINUX-TEST.md)**
 
-```sh
-cd tools/kernel
-make LLVM=1 -C /lib/modules/$(uname -r)/build M=$PWD modules
-sudo insmod snd-usb-babyface-pro.ko
-# or: frames_per_urb=16 nurbs=16  → the low-latency profile
-cat /proc/asound/cards          # card "BabyfaceProFS"
-```
+## Status & features
 
-The card then works like any ALSA/PipeWire device; the mixer is the
-normal ALSA control set (`amixer -c <n> controls`).
+**Hardware-validated** on a real Babyface Pro FS:
 
-## Tests
+- **Streaming** — 32–192 kHz, 2–12 channels, interrupt-URB, full-duplex; period floor 16 frames (0.33 ms), zero xruns across the sweep.
+- **Mixer (ALSA controls)** — 6 output masters + mutes, the full 6×14 crosspoint matrix, 4 preamp gains, phantom power + PAD, pitch/varispeed, loopback, width, FX send, MS processing, input link, AN 1>2, plus clock source, ref level, phase and trim.
+- **Front panel fully emulated** (the host is "in the loop", like TotalMix) — buttons, wheel, MIX-mode VU display.
+- **PM** — suspend/resume with full mixer-state restore.
+- **Automated checks** — `regress.sh` passes 40/40 on hardware; `selftests.sh` runs laws, build and checkpatch without the card.
 
-```sh
-sh tools/kernel/selftests.sh                 # laws + build + checkpatch (no card)
-sh tools/kernel/regress.sh --dur 1 --mixer-restore --disconnect-test   # needs the card
-```
+> The protocol was decoded from Windows USB captures and verified bit-by-bit on hardware. The full reference, the calibrated laws and the engineering history live in the docs below.
 
-## The reverse engineering
+## Documentation
 
-The protocol was reverse-engineered from USBPcap captures of the
-Windows driver + TotalMix FX, then validated bit-by-bit on hardware.
-The full reference is in this repo:
+Everything lives in dedicated files; this README only links to them.
 
-- **`tools/usbdump/PROTOCOL.md`**: every vendor request, the register
-  maps, the front-panel protocol, the stream layout
-- **`tools/usbdump/CALIBRATION.md`**: the calibrated laws (fader
-  curve, master curve, gain laws, EQ biquad)
-- **`tools/usbdump/`**: the capture-analysis tools (the captures
-  themselves are not in the repo)
-- **`KERNEL-DRIVER.md`**: the driver architecture + known gaps
-- **`LINUX-VALIDATION.md`**: the hardware validation log
+| If you want to… | Go to |
+|---|---|
+| **Build, load & test** the driver on real hardware | [`LINUX-TEST.md`](LINUX-TEST.md) |
+| Understand the **driver architecture & current gaps** | [`KERNEL-DRIVER.md`](KERNEL-DRIVER.md) |
+| See the **hardware validation log** (what was verified, and when) | [`LINUX-VALIDATION.md`](LINUX-VALIDATION.md) |
+| Read the **protocol reference** (register maps, requests, stream layout) | [`tools/usbdump/PROTOCOL.md`](tools/usbdump/PROTOCOL.md) |
+| Read the **calibrated laws** (fader/master curves, gains, EQ) | [`tools/usbdump/CALIBRATION.md`](tools/usbdump/CALIBRATION.md) |
+| Follow the **upstream submission** (RFC series, review prep) | [`tools/kernel/UPSTREAM.md`](tools/kernel/UPSTREAM.md) · [`patches/COVER-LETTER.md`](patches/COVER-LETTER.md) |
+| Dive into the **RE tooling** (USBPcap capture analysis) | [`tools/usbdump/README.md`](tools/usbdump/README.md) |
 
-## Upstream plan
+<details>
+<summary><b>Optional reading</b> — review & reverse-engineering notes</summary>
 
-1. Core driver (stream + mixer + front panel + DSP EQ) → RFC on
-   linux-usb / alsa-devel
-2. Follow-ups: clock source, input trim, ref-level, phase, stereo
-   split, the EQ HF-warping / shared-c4 details
-3. The user-space mixer application lives in the sibling repo
-   **[TuxMix](https://github.com/ismail-bahloul/TuxMix)** (control
-   stack + GUI/TUI).
+- External AI review of the driver & how each finding was resolved: [`docs/REVIEW-FINDINGS.md`](docs/REVIEW-FINDINGS.md)
+- Draft reply to the maintainer's v2 review: [`docs/REPLY-TO-TAKASHI-V2.md`](docs/REPLY-TO-TAKASHI-V2.md)
+- Original Windows capture plan (RE background): [`tools/usbdump/WINDOWS-CAPTURE-PLAN.md`](tools/usbdump/WINDOWS-CAPTURE-PLAN.md)
 
-## Related work / landscape
+</details>
 
-This driver targets the **proprietary USB mode** of the Babyface Pro FS
-(`2a39:3fc0`), which exposes the full channel count and the hardware
-DSP mixer at the lowest latency. To our knowledge this is the only
-reverse-engineered implementation of that mode on Linux. The other
-community projects approach RME control differently and don't overlap
-with it:
+## Why a dedicated driver?
 
-- **[oscmix](https://github.com/huddx01/oscmix)** (fork of
-  [michaelforney/oscmix](https://github.com/michaelforney/oscmix)):
-  controls RME **Fireface** units (UCX II, UFX family, 802, ...) in
-  **class-compliant mode over MIDI SysEx**, exposed as an OSC API, with
-  GTK/Qt/web UIs. No Babyface support and no proprietary-mode work.
-- **[rme-control-cli](https://github.com/stistrup/rme-control-cli)** and
-  **[rme-control-gui](https://github.com/stistrup/rme-control-gui)**: a
-  Rust CLI and Tauri GUI that wrap the **ALSA** controls of the
-  Babyface Pro in class-compliant mode. No device-level
-  reverse-engineering (the proprietary mode is untouched).
+The device presents two USB personalities:
 
-So the proprietary-mode protocol, the register maps, and the calibrated
-laws in this repo are the first published RE of that surface; the rest
-of the Linux ecosystem goes through the more limited class-compliant
-control surface.
+- a **class-compliant** one, handled by the stock `snd-usb-audio`, and
+- the **proprietary** one (`2a39:3fc0`) whose PCM stream runs on interrupt endpoints and whose mixer is a vendor-control surface.
+
+The proprietary mode is the interesting one — full channel count + hardware DSP mixer at the lowest latency — and the only reverse-engineered implementation of it on Linux. The rest of the ecosystem stays on the more limited class-compliant surface ([oscmix](https://github.com/huddx01/oscmix), [rme-control-cli](https://github.com/stistrup/rme-control-cli)).
 
 ## License
 
