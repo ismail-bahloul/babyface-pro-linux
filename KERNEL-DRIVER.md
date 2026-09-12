@@ -66,6 +66,7 @@ libasound_module_pcm_tuxmix.so  ← PipeWire via spa-alsa (sink/source)
 | PM: suspend/resume with full cached-state restore (cold init + mixer re-apply) | ✅ |
 | checkpatch | ✅ 0 errors / 0 warnings |
 | Packaging: DKMS (survives kernel upgrades, no manual rebuild) | ✅ 2026-09-07 — `tools/kernel/dkms.conf` + `aur/snd-usb-babyface-pro-dkms/PKGBUILD`; tries plain `make` first, falls back to `LLVM=1 CC=clang` for clang-built kernels (CachyOS). Hardware-validated: built, installed, MOK-signed, and reloaded live via `dkms build`/`install` + `modprobe` on the dev box — all recent controls (Clock Source, Ref Level, Phase, Split, Trim) confirmed present via `amixer` after the DKMS-managed reload |
+| Latency profiles discoverable (not just in a README footnote) | ✅ 2026-09-12 — `tools/kernel/snd-usb-babyface-pro.conf`, a fully-commented `modprobe.d` template installed by the DKMS package to `/usr/lib/modprobe.d/`. Shipped commented on purpose: the driver's compiled-in defaults are unchanged (the tree is under upstream review), and 16/16 is NOT safe to default to — it drops ~1 capture sample / 7 s. README's blockquote used to recommend exactly that lossy profile; corrected to **32/8 (0.67 ms)**, which was re-verified live on 2026-09-12: 20 s full-duplex at period 32, 0 xruns either direction, capture file byte-exact (7,680,044 = 48000×2×4×20 + header) |
 
 Hardware test results (2026-08-24, live card):
 - 440 Hz playback heard on PH3/4; master mute/unmute verified by ear.

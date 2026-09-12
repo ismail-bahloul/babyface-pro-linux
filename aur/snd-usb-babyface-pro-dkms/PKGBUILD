@@ -37,6 +37,13 @@ package() {
     sed -i "s/^PACKAGE_VERSION=.*/PACKAGE_VERSION=\"${pkgver}\"/" \
         "${_dkms_src}/dkms.conf"
 
+    # Latency-profile template. Every line in it is commented out, so
+    # installing it changes nothing by itself — it exists so the
+    # low-latency profiles are discoverable instead of buried in a
+    # README. Users opt in by overriding in /etc/modprobe.d/.
+    install -Dm644 tools/kernel/snd-usb-babyface-pro.conf \
+        "${pkgdir}/usr/lib/modprobe.d/snd-usb-babyface-pro.conf"
+
     install -Dm644 LICENSE \
         "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }

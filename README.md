@@ -36,7 +36,15 @@ sudo modprobe snd-usb-babyface-pro
 
 Then the mixer is the normal ALSA control set: `amixer -c <n> controls`.
 
-> **Low-latency profile:** load with `frames_per_urb=16 nurbs=16` for the 0.33 ms monitoring floor (the default is the TotalMix-parity 256 samples). To switch profiles you currently reload the module.
+> **Low-latency profiles — off by default, worth turning on.** The driver ships the TotalMix-parity 256 samples (≈5.3 ms) so a fresh install is stable everywhere. Measured at 48 kHz, full-duplex:
+>
+> | `frames_per_urb` | `nurbs` | period | result |
+> |---|---|---|---|
+> | 256 *(default)* | 8 | 5.3 ms | 100 % stable |
+> | **32** | **8** | **0.67 ms** | **100 % stable — recommended** |
+> | 16 | 16 | 0.33 ms | playback rock-solid, but capture drops ~1 sample / 7 s |
+>
+> Pick **32/8** unless you are monitoring only: the 0.33 ms floor is asymmetric, solid for playback but lossy for *recording*. The DKMS package installs a commented template at `/usr/lib/modprobe.d/snd-usb-babyface-pro.conf`; uncomment a line there (or override in `/etc/modprobe.d/`) and reload the module. Latency is quantised to the URB boundary, so it does not depend on the period size your DAW asks for.
 > **Full build / load / test walkthrough** (manual build, hardware checks, front-panel probes) → **[`LINUX-TEST.md`](LINUX-TEST.md)**
 
 ## Status & features
