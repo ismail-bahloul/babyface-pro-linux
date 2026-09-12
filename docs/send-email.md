@@ -55,12 +55,11 @@ git send-email \
   --cc=perex@perex.cz \
   --cc=tiwai@suse.com \
   --cc=linux-kernel@vger.kernel.org \
-  /tmp/rfcpatch/0000-cover-letter.patch \
-  /tmp/rfcpatch/0001-ALSA-usb-add-RME-Babyface-Pro-FS-driver-proprietary-.patch \
-  /tmp/rfcpatch/0002-ALSA-usb-babyface-pro-add-the-mixer-control-surface.patch \
-  /tmp/rfcpatch/0003-ALSA-usb-babyface-pro-add-the-front-panel-poll-contr.patch \
-  /tmp/rfcpatch/0004-ALSA-usb-babyface-pro-add-the-hardware-DSP-EQ.patch
-```
+  patches/v3-0000-cover-letter.patch \
+  patches/v3-0001-ALSA-usb-add-RME-Babyface-Pro-FS-driver-proprieta.patch \
+  patches/v3-0002-ALSA-usb-babyface-pro-add-the-mixer-control-surfa.patch \
+  patches/v3-0003-ALSA-usb-babyface-pro-add-the-front-panel-poll-co.patch \
+  patches/v3-0004-ALSA-usb-babyface-pro-add-the-hardware-DSP-EQ.patch
 ```
 
 At the `Password for 'smtp.gmail.com':` prompt, paste the App Password

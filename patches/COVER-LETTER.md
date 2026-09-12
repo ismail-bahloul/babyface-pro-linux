@@ -31,8 +31,9 @@ the kernel side of that effort.
 
 What's included:
 
- - Interrupt-URB PCM streaming, full-duplex, 2-12 channels, S24_LE,
-   9 sample rates from 32 to 192 kHz across 3 USB bandwidth classes.
+ - Interrupt-URB PCM streaming, full-duplex, 2-12 channels, S32_LE
+   (24 msbits), 9 sample rates from 32 to 192 kHz across 3 USB
+   bandwidth classes.
  - ALSA mixer: 6 output masters and mutes, the 6x14 crosspoint routing
    matrix, 4 mic/instrument preamp gains with phantom power and PAD,
    pitch/varispeed, loopback, and a few device-specific toggles

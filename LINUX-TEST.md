@@ -42,8 +42,8 @@ Generate a test tone, then play/record at the card number shown by
 
 ```bash
 python3 tools/kernel/mktone.py /tmp/tone.wav 440 -20 5
-aplay -D hw:3,0 -f S24_LE -c 2 -r 48000 /tmp/tone.wav
-arecord -D hw:3,0 -f S24_LE -c 2 -r 48000 /tmp/rec.wav
+aplay -D hw:3,0 -f S32_LE -c 2 -r 48000 /tmp/tone.wav
+arecord -D hw:3,0 -f S32_LE -c 2 -r 48000 /tmp/rec.wav
 ```
 
 Note: the device only advances audio while **both** directions have a

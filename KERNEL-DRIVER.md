@@ -48,7 +48,7 @@ libasound_module_pcm_tuxmix.so  ← PipeWire via spa-alsa (sink/source)
 | Probe / card registration (card "Babyface Pro FS") | ✅ |
 | Cold init sequence (cap_coldplug) + session arm at probe | ✅ |
 | Interrupt stream (ep 0x01/0x82, 256 frames/URB, 8 URBs/direction) | ✅ |
-| PCM playback + capture (2 ch S24_LE, 9 rates 32-192 kHz) | ✅ |
+| PCM playback + capture (S32_LE, 24 msbits, 9 rates 32-192 kHz) | ✅ |
 | Rate switch = SET_INTERFACE(5, alt) (3 bandwidth classes) | ✅ 32/44.1/48/64/88.2 = alt1, 96/128 = alt2, 176.4/192 = alt3 — measured exact (48/96/192 kHz frame rates) |
 | Controls: 6 output masters (0-0x4000 raw, 0 dB = 0x2000) + mutes | ✅ per-output names ("AN1/2" / "PH3/4" / … Playback Volume+Switch) — the 8-bit register is the REAL volume (0.5 dB/step, 0xF3 = 0 dB) |
 | System volume = PipeWire SOFTWARE volume | ✅ DONE 2026-08-26 (cap_sysvol2.pcap: the Windows volume is a host-side stream gain, zero USB writes): the masters are named per output so SPA finds no "Master" element → the sink falls back to software volume; `wpctl set-volume` no longer moves any hardware register (verified). See “System-volume model — CORRECTED AGAIN” |
@@ -639,8 +639,8 @@ sudo insmod snd-usb-babyface-pro.ko
 # reload after a change (interface 5 is bound):
 echo "3-1:1.5" | sudo tee /sys/bus/usb/drivers/snd-usb-babyface-pro/unbind
 sudo rmmod snd_usb_babyface_pro && sudo insmod snd-usb-babyface-pro.ko
-aplay -D hw:3,0 -f S24_LE -c 2 -r 48000 /tmp/tone.raw
-arecord -t raw -D hw:3,0 -f S24_LE -c 2 -r 48000 -d 3 /tmp/cap.raw
+aplay -D hw:3,0 -f S32_LE -c 2 -r 48000 /tmp/tone.raw
+arecord -t raw -D hw:3,0 -f S32_LE -c 2 -r 48000 -d 3 /tmp/cap.raw
 ```
 
 The user-space TuxMix stays the reference/validation suite forever

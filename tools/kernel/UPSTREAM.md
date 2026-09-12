@@ -8,9 +8,9 @@ and the driver is standalone, modeled on `snd-usb-caiaq`.
 
 ## What is hardware-validated (2026-08, on a real unit)
 
-- Interrupt-endpoint PCM: full-duplex 2 ch S24_LE, 9 rates
-  32–192 kHz (3 bandwidth alts), zero xruns in sweeps and soaks
-  (period ≥ 32 frames; 16 with nurbs=16, monitoring-grade).
+- Interrupt-endpoint PCM: full-duplex 2 ch S32_LE (24 msbits), 9 rates
+  32-192 kHz (3 bandwidth alts), zero xruns in sweeps and soaks
+  (period >= 32 frames; 16 with nurbs=16, monitoring-grade).
 - Vendor-request mixer (all decoded from Windows USB captures,
   `tools/usbdump/PROTOCOL.md`):
   - 6 output masters + mutes (the 8-bit register is the real volume,
