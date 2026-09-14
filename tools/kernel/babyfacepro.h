@@ -292,6 +292,7 @@ struct snd_usb_babyface {
 	unsigned int rate;
 	unsigned int alt;
 	int stream_users;		/* PCM substreams sharing the stream */
+	bool restart_pending;		/* STOP reached zero before work ran */
 	bool streaming;			/* URBs actually in flight */
 	bool shutdown;
 	atomic_t urb_err;		/* consecutive bad URBs (stops the stream) */
