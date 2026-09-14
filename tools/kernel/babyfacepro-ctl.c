@@ -2280,15 +2280,31 @@ static void bf_panel_out_wheel(struct snd_usb_babyface *chip, int delta)
 {
 	int out = chip->panel_out == 3 ? 5 :
 		  chip->panel_out == 2 ? 1 : 0;
-	int hl, hr;
-	u16 l, r;
+	int ch, db, remainder;
+	u16 next[2];
+	s16 residual[2];
 
 	mutex_lock(&chip->mutex);
-	hl = bf_master_half_db(chip->master[out][0]) + delta;
-	hr = bf_master_half_db(chip->master[out][1]) + delta;
-	l = bf_master_16bit(clamp(hl, -128, 12));
-	r = bf_master_16bit(clamp(hr, -128, 12));
-	bf_panel_write_master(chip, out, l, r);
+	for (ch = 0; ch < 2; ch++) {
+		u16 raw = chip->master[out][ch];
+
+		/* A software fader or balance change rebases the wheel. */
+		remainder = raw == chip->panel_master_last[out][ch] ?
+			    chip->panel_master_remainder[out][ch] : 0;
+		db = clamp(bf_master_half_db(raw) + remainder + delta,
+			   -128, 12);
+		next[ch] = bf_master_16bit(db);
+		/* Near the floor, several half-dB positions round to the
+		 * same integer.  Carry that difference into the next poll
+		 * instead of discarding every individually received step.
+		 */
+		residual[ch] = db - bf_master_half_db(next[ch]);
+	}
+	bf_panel_write_master(chip, out, next[0], next[1]);
+	for (ch = 0; ch < 2; ch++) {
+		chip->panel_master_last[out][ch] = next[ch];
+		chip->panel_master_remainder[out][ch] = residual[ch];
+	}
 	mutex_unlock(&chip->mutex);
 }
 

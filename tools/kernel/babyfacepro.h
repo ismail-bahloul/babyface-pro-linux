@@ -389,6 +389,9 @@ struct snd_usb_babyface {
 					 * gesture; a tap flashes only ~100-150 ms,
 					 * selhold_probe2 - no engaged bit)
 					 */
+	/* Preserve sub-integer volume progress between OUT wheel polls. */
+	u16 panel_master_last[6][2];
+	s16 panel_master_remainder[6][2];
 	u16 panel_mix_raw;		/* MIX-mode monitoring level (fader raw) */
 	u8 panel_mix_disp[4];		/* MIX-mode VU display shadow per mic
 					 * (0x1A 0x000A+mic - written on change
