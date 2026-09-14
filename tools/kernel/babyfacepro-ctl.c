@@ -2029,20 +2029,20 @@ static int bf_panel_in_decode(u8 nib)
 	}
 }
 
-/* byte1 & 7 = OUT position.  Two encodings seen in captures: the
- * gain-display mode 0x04/0x05/0x06 (cap_dim.pcap, cap_buttons2.pcap)
- * and the base mode 0x01/0x02/0x00 (cap_buttons.pcap; 0x01 is also the
- * idle byte1 of cap_padpan.pcap and the live device).  Accept both;
- * 0x00 is ambiguous (could be Opt or no selection) so keep previous.
+/* byte1 & 7 = OUT position.  The original Babyface Pro reports
+ * 0/1/2 for physical Ch 1/2 / Phones / Opt (LED-correlated capture).
+ * Preserve the 4/5/6 encoding from cap_dim/cap_buttons2 as well.
+ * The 0/1/2 interpretation still needs verification on the Pro FS.
  */
 static int bf_panel_out_decode(u8 v)
 {
 	switch (v) {
+	case 0x00:
 	case BF_PANEL_OUT_CH12:		return 1;
+	case 0x01:
 	case BF_PANEL_OUT_PHONES:	return 2;
+	case 0x02:
 	case BF_PANEL_OUT_OPT:		return 3;
-	case 0x01:			return 1;	/* base-mode Ch 1/2 */
-	case 0x02:			return 2;	/* base-mode Phones */
 	default:			return 0;
 	}
 }
