@@ -1025,8 +1025,7 @@ static int bf_pitch_put(struct snd_kcontrol *kctl,
 {
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
 	int p = ucontrol->value.integer.value[0];
-	u32 dds24, dds16;
-	u16 frac, b1, b2;
+	int old;
 	int ret = 0;
 
 	if (p < -50 || p > 50)
@@ -1036,38 +1035,18 @@ static int bf_pitch_put(struct snd_kcontrol *kctl,
 	if (p == chip->pitch)
 		goto out;
 
-	/* The 0x1B DDS quad (16.8 fixed point, banked).  p is 0.1 % steps:
-	 * DDS_24 = round(50000*256/(1+p/1000)) = round(12800000000/(1000+p)).
+	/* The DDS quad is the device clock, so pitch and sample rate are the
+	 * same register: bf_clock_write() composes both from chip->pitch and
+	 * the active rate, and sends the settings keepalive that commits the
+	 * quad.  Publish the new pitch first, since it reads it.
 	 */
-	dds24 = div_u64(12800000000ULL + (u32)(1000 + p) / 2, 1000 + p);
-	dds16 = dds24 >> 8;
-	frac = dds24 & 0xff;
-	b1 = (u16)div_u64(dds16 * 72562ull + 50000, 100000);
-	b2 = (u16)((dds16 * 2 + 1) / 3);
-
-	ret = bf_vendor_write(chip, BF_REQ_DDS, (u16)dds16, (frac << 8) | 0);
-	if (ret < 0)
-		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_DDS, b1, 0x0001);
-	if (ret < 0)
-		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_DDS, b2, 0x0002);
-	if (ret < 0)
-		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_DDS, 0x7cff, 0x0003);
-	if (ret < 0)
-		goto out;
-	/* Every quad must be followed by the settings keepalive - composed
-	 * from tracked state so this doesn't silently force the clock back
-	 * to Internal if Optical was engaged (the bug the hardcoded 0x0001
-	 * here used to have, same class as the settings-word flag-stomping
-	 * this driver's sibling TuxMix project already hit and fixed).
-	 */
-	ret = bf_settings_write(chip);
-	if (ret < 0)
-		goto out;
-
+	old = chip->pitch;
 	chip->pitch = p;
+	ret = bf_clock_write(chip, chip->rate);
+	if (ret < 0) {
+		chip->pitch = old;
+		goto out;
+	}
 	ret = 1;
 out:
 	mutex_unlock(&chip->mutex);

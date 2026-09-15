@@ -32,9 +32,11 @@
  *     16x16.
  *   - The device only advances the stream while BOTH endpoints have a
  *     pending URB - IN and OUT are always submitted as a pair.
- *   - Sample rate = SET_INTERFACE(5, alt) only; the alt is a bandwidth
- *     class (alt 1 = 32/44.1/48/64/88.2 kHz, alt 2 = 96/128 kHz,
- *     alt 3 = 176.4/192 kHz), not a 1:1 rate code.
+ *   - SET_INTERFACE(5, alt) selects single/double/quad speed and USB
+ *     packet capacity; the BASE rate is the 0x1B DDS quad, which also
+ *     carries varispeed - one register for both.  Three bases (32/44.1/
+ *     48 kHz) times three speeds give all nine rates.  Request 0x10 at
+ *     index 0x0030 does nothing (measured; see bf_clock_write).
  */
 
 #include <linux/log2.h>
@@ -57,9 +59,9 @@
 #define BF_EP_OUT			0x01
 #define BF_EP_IN			0x82
 
-#define BF_ALT_1			1	/* 32/44.1/48/64/88.2 kHz, 448-B packets */
-#define BF_ALT_2			2	/* 96/128 kHz, 640-B packets */
-#define BF_ALT_3			3	/* 176.4/192 kHz, 1024-B packets */
+#define BF_ALT_1			1	/* x1: 32/44.1/48 kHz, 448-B packets */
+#define BF_ALT_2			2	/* x2: 64/88.2/96 kHz, 640-B packets */
+#define BF_ALT_3			3	/* x4: 128/176.4/192 kHz, 1024-B packets */
 
 /* Default stream geometry - conservative, matches the RME TotalMix
  * 256-sample buffer.  Both are tunable via module params; the
@@ -428,6 +430,7 @@ struct bf_rate {
 	unsigned int alt;
 	unsigned int frame_bytes;
 	unsigned int min_fpu;	/* frames/URB floor = one alt packet (448/640/1024 B) */
+	unsigned int base;	/* DDS base rate: 44100, 48000 or 64000 */
 };
 
 /* Sample-rate / alt classes (babyfacepro.c). */
@@ -448,6 +451,7 @@ extern const struct snd_pcm_hw_constraint_list bf_rates_constraint;
 /* -- babyfacepro.c ------------------------ */
 int bf_vendor_write(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx);
 int bf_settings_write(struct snd_usb_babyface *chip);
+int bf_clock_write(struct snd_usb_babyface *chip, unsigned int rate);
 int bf_vendor_write_cycle(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx);
 int bf_vendor_read(struct snd_usb_babyface *chip, u8 req, u16 idx, u8 *buf);
 int bf_cold_init(struct snd_usb_babyface *chip);

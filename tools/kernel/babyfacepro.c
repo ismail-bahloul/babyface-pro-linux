@@ -30,16 +30,27 @@ const u16 bf_flag_cycle[4] = { 0xc000, 0x4000, 0x8000, 0x0000 };
 
 /* -- sample-rate / alt classes -------------------- */
 
+/* rate = base << (alt - 1): three DDS bases, three interface speeds.
+ * Measured on hardware, all nine rates.
+ *
+ * 64 kHz is the 32 kHz base at x2, not a 64 kHz base at x1.  Both clock
+ * 64 kHz at pitch 0, but a 64 kHz base on alt 1 needs 64000 x 56 B =
+ * 3584 kB/s, which is exactly alt 1's 448-byte packet ceiling: any
+ * positive varispeed then runs off the end of the bus, and the device
+ * delivers the mirrored rate instead (asked +5 %, got -5 %).  At x2 the
+ * frame is 40 B, so the same 64 kHz costs 2560 kB/s against a 5120 kB/s
+ * ceiling.  Same reasoning puts 128 kHz on alt 3 rather than alt 2.
+ */
 static const struct bf_rate bf_rates[] = {
-	{  32000, BF_ALT_1, 56,  8 },
-	{  44100, BF_ALT_1, 56,  8 },
-	{  48000, BF_ALT_1, 56,  8 },
-	{  64000, BF_ALT_1, 56,  8 },
-	{  88200, BF_ALT_1, 56,  8 },
-	{  96000, BF_ALT_2, 40, 16 },
-	{ 128000, BF_ALT_2, 40, 16 },
-	{ 176400, BF_ALT_3, 32, 32 },
-	{ 192000, BF_ALT_3, 32, 32 },
+	{  32000, BF_ALT_1, 56,  8,  32000 },
+	{  44100, BF_ALT_1, 56,  8,  44100 },
+	{  48000, BF_ALT_1, 56,  8,  48000 },
+	{  64000, BF_ALT_2, 40, 16,  32000 },
+	{  88200, BF_ALT_2, 40, 16,  44100 },
+	{  96000, BF_ALT_2, 40, 16,  48000 },
+	{ 128000, BF_ALT_3, 32, 32,  32000 },
+	{ 176400, BF_ALT_3, 32, 32,  44100 },
+	{ 192000, BF_ALT_3, 32, 32,  48000 },
 };
 
 static const unsigned int bf_rate_list[ARRAY_SIZE(bf_rates)] = {
@@ -104,6 +115,67 @@ int bf_settings_write(struct snd_usb_babyface *chip)
 			       BF_REG_KEEPALIVE_SETTINGS);
 }
 
+/* Program the device clock.  The clock is the 0x1B DDS quad - a PERIOD
+ * in 16.8 fixed point, not a rate register - and SET_INTERFACE scales it
+ * by 1/2/4.  Measured on hardware (all nine rates, 2026-09-15):
+ *
+ *	rate = (48000 * 50000 / DDS_16) << (alt - 1)
+ *
+ * Varispeed uses the same register, so rate and pitch are one expression
+ * and each has to re-apply when the other changes:
+ *
+ *	DDS_24 = round(12800000000 * 48000 / (base * (1000 + pitch)))
+ *
+ * pitch is in 0.1 % steps, so pitch = 0 at base 48000 gives DDS_24 =
+ * 12800000 = the 0xc350/0x8db8/0x8234/0x7cff quad the coldplug capture
+ * has always sent.
+ *
+ * At the 32 kHz base the integer part is 75000 and does not fit bank0's
+ * 16-bit wValue.  Writing its low word anyway still clocks 32 kHz
+ * correctly, because banks 1 and 2 - which stay in range - are what the
+ * device derives the rate from; every one of the nine rates was measured
+ * this way.  bank3 has no effect on the rate at all (22 values tried),
+ * so it stays at its 0 % value.
+ *
+ * The 0x10 write to index 0x0030 this function used to make does
+ * nothing: all three documented values, against two different quads,
+ * produced byte-identical stream rates.
+ */
+int bf_clock_write(struct snd_usb_babyface *chip, unsigned int rate)
+{
+	const struct bf_rate *r = bf_rate_lookup(rate);
+	u32 den, dds24, dds_int;
+	u16 frac, b1, b2;
+	int ret;
+
+	if (!r)
+		return -EINVAL;
+
+	den = r->base * (u32)(1000 + chip->pitch);
+	dds24 = div_u64(12800000000ULL * 48000ULL + den / 2, den);
+	dds_int = dds24 >> 8;
+	frac = dds24 & 0xff;
+	b1 = (u16)div_u64((u64)dds_int * 72562ull + 50000, 100000);
+	b2 = (u16)((dds_int * 2 + 1) / 3);
+
+	ret = bf_vendor_write(chip, BF_REQ_DDS, (u16)dds_int, (frac << 8) | 0);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_DDS, b1, 0x0001);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_DDS, b2, 0x0002);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_DDS, 0x7cff, 0x0003);
+	if (ret < 0)
+		return ret;
+	/* Every quad must be followed by the settings keepalive or it does
+	 * not apply - composed from tracked flags, not hardcoded 0x0001.
+	 */
+	return bf_settings_write(chip);
+}
+
 /* Write with the per-transaction flag-cycle word OR'd into idx.  The
  * device wants the flag word (0xc000/0x4000/0x8000/0x0000, rotating)
  * set on every 0x12/0x1a write; this is the hot path for the mixer
@@ -132,17 +204,11 @@ int bf_cold_init(struct snd_usb_babyface *chip)
 		if (ret < 0)
 			return ret;
 	}
-	/* 48-kHz DDS clock quads (banked 0x1B). */
-	ret = bf_vendor_write(chip, BF_REQ_DDS, 0xc350, 0x0000);
-	if (ret < 0)
-		return ret;
-	ret = bf_vendor_write(chip, BF_REQ_DDS, 0x8db8, 0xd201);
-	if (ret < 0)
-		return ret;
-	ret = bf_vendor_write(chip, BF_REQ_DDS, 0x8234, 0xd302);
-	if (ret < 0)
-		return ret;
-	ret = bf_vendor_write(chip, BF_REQ_DDS, 0x7cff, 0xf803);
+	/* The clock quad for the active rate and pitch.  At 48 kHz with
+	 * pitch 0 this is byte-identical to the coldplug capture's own
+	 * quad, which is what used to be hardcoded here.
+	 */
+	ret = bf_clock_write(chip, chip->rate);
 	if (ret < 0)
 		return ret;
 	/* 0x1C status - the hardware-validated reference (protocol::
@@ -262,29 +328,8 @@ int babyface_restore_state(struct snd_usb_babyface *chip)
 			return ret;
 	}
 
-	/* Pitch (the DDS quad) + the clock keepalive. */
-	if (chip->pitch) {
-		u32 dds24 = div_u64(12800000000ULL + (u32)(1000 + chip->pitch) / 2,
-				    1000 + chip->pitch);
-		u16 dds16 = dds24 >> 8;
-		u16 frac = dds24 & 0xff;
-
-		ret = bf_vendor_write(chip, BF_REQ_DDS, dds16, (frac << 8) | 0);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_DDS,
-				      (u16)div_u64(dds16 * 72562ull + 50000, 100000), 0x0001);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_DDS, (u16)((dds16 * 2 + 1) / 3),
-				      0x0002);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_DDS, 0x7cff, 0x0003);
-		if (ret < 0)
-			return ret;
-	}
-	return bf_settings_write(chip);
+	/* One quad carries both the rate and the pitch. */
+	return bf_clock_write(chip, chip->rate);
 }
 
 /* Re-apply the non-master flags (loopback / AN1>2 / link / width /
@@ -840,12 +885,13 @@ void babyface_stream_work(struct work_struct *work)
 {
 	struct snd_usb_babyface *chip =
 		container_of(work, struct snd_usb_babyface, stream_work);
-	unsigned int urbsize = chip->frame_bytes * chip->frames_per_urb;
+	unsigned int urbsize;
 	unsigned long flags;
 	int i, ret;
 	int users;
 
 	mutex_lock(&chip->mutex);
+	urbsize = chip->frame_bytes * chip->frames_per_urb;
 
 	if (chip->shutdown) {
 		mutex_unlock(&chip->mutex);
@@ -894,6 +940,8 @@ void babyface_stream_work(struct work_struct *work)
 			goto err;
 
 		for (i = 0; i < chip->nurbs; i++) {
+			/* Do not replay data from the previous stream/format. */
+			memset(chip->buf_out[i], 0, urbsize);
 			usb_fill_int_urb(chip->urbs_in[i], chip->dev,
 					 usb_rcvintpipe(chip->dev, BF_EP_IN),
 					 chip->buf_in[i], urbsize,
@@ -1070,23 +1118,21 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 		 * step (PipeWire re-negotiates via its resampler) instead of
 		 * this open failing with -EBUSY (which killed the PW sink).
 		 */
-		if (chip->streaming) {
-			unsigned long flags;
-
+		if (chip->streaming)
 			babyface_stream_kill(chip);
-			spin_lock_irqsave(&chip->lock, flags);
-			if (chip->stream_users > 0)
-				schedule_work(&chip->stream_work);
-			spin_unlock_irqrestore(&chip->lock, flags);
-		}
 		ret = usb_set_interface(chip->dev, BF_IFACE, r->alt);
-		if (ret < 0)
+		if (ret < 0) {
+			babyface_pcm_stop_both(chip, SNDRV_PCM_STATE_XRUN);
+			bf_recount_users(chip);
 			goto out;
+		}
 		chip->rate = r->rate;
 		chip->alt = r->alt;
 		chip->frame_bytes = r->frame_bytes;
 		/* The DSP EQ coefficients depend on fs: re-upload. */
 		bf_eq_reupload(chip);
+		/* Publish the new geometry before restarting either stream. */
+		schedule_work(&chip->stream_work);
 		dev_dbg(&chip->dev->dev, "rate %u Hz (alt %u)\n",
 			chip->rate, chip->alt);
 	}
@@ -1197,7 +1243,7 @@ static void babyface_private_free(struct snd_card *card)
 	 * them (snd_card_free runs private_free on any probe error).
 	 */
 	if (chip->urbs_in) {
-		urbsize = chip->frame_bytes * chip->frames_per_urb;
+		urbsize = BF_WORDS_PER_FRAME * sizeof(u32) * chip->frames_per_urb;
 		for (i = 0; i < chip->nurbs; i++) {
 			if (chip->urbs_in[i]) {
 				usb_kill_urb(chip->urbs_in[i]);
@@ -1354,7 +1400,8 @@ static int babyface_probe(struct usb_interface *intf,
 		goto error;
 	}
 
-	urbsize = chip->frame_bytes * chip->frames_per_urb;
+	/* Keep the allocation size independent of the active USB mode. */
+	urbsize = BF_WORDS_PER_FRAME * sizeof(u32) * chip->frames_per_urb;
 	chip->urbs_in = kcalloc(chip->nurbs, sizeof(*chip->urbs_in), GFP_KERNEL);
 	chip->urbs_out = kcalloc(chip->nurbs, sizeof(*chip->urbs_out), GFP_KERNEL);
 	chip->buf_in = kcalloc(chip->nurbs, sizeof(*chip->buf_in), GFP_KERNEL);
