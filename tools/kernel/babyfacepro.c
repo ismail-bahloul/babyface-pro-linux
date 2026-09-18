@@ -935,6 +935,7 @@ void babyface_stream_work(struct work_struct *work)
 	unsigned long flags;
 	int i, ret;
 	int users;
+	bool restart;
 
 	mutex_lock(&chip->mutex);
 	urbsize = chip->frame_bytes * chip->frames_per_urb;
@@ -964,7 +965,16 @@ void babyface_stream_work(struct work_struct *work)
 
 	spin_lock_irqsave(&chip->lock, flags);
 	users = chip->stream_users;
+	restart = chip->restart_pending;
+	chip->restart_pending = false;
 	spin_unlock_irqrestore(&chip->lock, flags);
+
+	/* A fast STOP -> START can be coalesced into this one work run.
+	 * stream_users is then positive again while streaming is still true,
+	 * but the firmware still needs a complete session restart.
+	 */
+	if (restart && chip->streaming)
+		babyface_stream_kill(chip);
 
 	if (users > 0 && !chip->streaming) {
 		/* The firmware only validates a stream session that is
@@ -1283,8 +1293,14 @@ static int babyface_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		return 0;
 	case SNDRV_PCM_TRIGGER_STOP:
 		spin_lock_irqsave(&chip->lock, flags);
-		if (chip->stream_users > 0 && --chip->stream_users == 0)
+		if (chip->stream_users > 0 && --chip->stream_users == 0) {
+			/* Remember the zero crossing.  START can arrive before the
+			 * asynchronous worker runs and make stream_users positive
+			 * again; the device session must still be torn down.
+			 */
+			chip->restart_pending = true;
 			schedule_work(&chip->stream_work);
+		}
 		spin_unlock_irqrestore(&chip->lock, flags);
 		return 0;
 	}
