@@ -18,6 +18,7 @@
 // With a capture period that differs from the playback one, playback runs
 // in its own thread and the xruns are counted per direction.
 #include <alsa/asoundlib.h>
+#include <getopt.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,11 +46,21 @@ static void usage(const char *prog)
 		"               internal playback tap; 2 = IN3 via a cable)\n"
 		"  -c P/B       capture period/buffer (default: as playback)\n"
 		"  -f pb|cap    set up this direction first (default pb)\n"
+		"  -D, --delay  check snd_pcm_delay() instead: see below\n"
 		"  -h           this help\n"
 		"\n"
 		"prints: latency_frames=N latency_ms=X xruns=N; with a capture\n"
 		"        period other than the playback one, pb_xruns=N\n"
-		"        cap_xruns=N instead of xruns=N\n",
+		"        cap_xruns=N instead of xruns=N\n"
+		"\n"
+		"--delay: stream silence, and every half second write an impulse.\n"
+		"Just before, read snd_pcm_delay() on both streams: the impulse\n"
+		"should appear at capture frame (frames read + capture delay +\n"
+		"playback delay).  extra = where it appears minus that, i.e. the\n"
+		"latency the delays do not report (converters, USB).  Needs the\n"
+		"same period in both directions.\n"
+		"prints: impulses=N extra_min=N extra_max=N extra_avg=X\n"
+		"        reported_avg=X measured_avg=X xruns=N\n",
 		prog);
 }
 
@@ -118,15 +129,122 @@ static int no_autostart(snd_pcm_t *p)
 	return snd_pcm_sw_params(p, s);
 }
 
+/* --delay: the check a DAW's latency compensation relies on.  The
+ * streams run in lockstep, one capture period read, one playback period
+ * written.  Before the write that starts an impulse, the playback delay
+ * says in how many frames that impulse is heard, and the capture delay
+ * how far the frame being captured now is ahead of what has been read. */
+#define IMPULSE_W	60
+#define IMPULSE_AMP	0x40000000
+
+static int run_delay(snd_pcm_t *pb, snd_pcm_t *cap, int pb_ch, int cap_ch,
+		     int det_ch, int rate, snd_pcm_uframes_t period, int dur)
+{
+	int32_t *wbuf = calloc(period * pb_ch, sizeof(int32_t));
+	int32_t *cbuf = calloc(period * cap_ch, sizeof(int32_t));
+	long every = ((long)rate / 2 / period) * period;	/* ~0.5 s */
+	long npred = (long)dur * 2 + 2, n = 0, hits = 0;
+	long *pred = calloc(npred, sizeof(long));
+	long *rep = calloc(npred, sizeof(long));
+	long *wpos = calloc(npred, sizeof(long));
+	long frame = 0, pulse = -1, last_edge = -rate;
+	long emin = 0, emax = 0;
+	double esum = 0, rsum = 0, msum = 0;
+	int xruns = 0, prev_hi = 0;
+
+	if (every < (long)period)
+		every = period;
+	while (frame < (long)rate * dur) {
+		snd_pcm_sframes_t r = snd_pcm_readi(cap, cbuf, period);
+
+		if (r < 0) {
+			xruns++;
+			break;		/* the lockstep is gone: stop */
+		}
+		for (long i = 0; i < r; i++) {
+			int32_t v = cbuf[i * cap_ch + det_ch];
+			int hi = abs(v) > IMPULSE_AMP / 64;
+			long at = frame + i;
+
+			/* The first rising edge after each prediction. */
+			if (hi && !prev_hi && at - last_edge > rate / 10) {
+				last_edge = at;
+				while (hits < n && pred[hits] + rate / 4 < at)
+					hits++;	/* impulse lost: skip it */
+				if (hits < n && at > pred[hits] - rate / 10) {
+					long e = at - pred[hits];
+
+					if (!hits || e < emin)
+						emin = e;
+					if (!hits || e > emax)
+						emax = e;
+					esum += e;
+					rsum += rep[hits];
+					msum += at - wpos[hits];
+					hits++;
+				}
+			}
+			prev_hi = hi;
+		}
+		frame += r;
+
+		/* Start an impulse every ~0.5 s, after the first second. */
+		if (pulse < 0 && frame >= rate && frame % every == 0 && n < npred) {
+			snd_pcm_sframes_t dp, dc;
+
+			if (snd_pcm_delay(pb, &dp) < 0 || snd_pcm_delay(cap, &dc) < 0) {
+				xruns++;
+				break;
+			}
+			pred[n] = frame + dc + dp;
+			rep[n] = dc + dp;
+			wpos[n] = frame;
+			n++;
+			pulse = 0;
+		}
+		for (snd_pcm_uframes_t f = 0; f < period; f++) {
+			int32_t a = pulse >= 0 && pulse < IMPULSE_W ? IMPULSE_AMP : 0;
+
+			for (int c = 0; c < pb_ch; c++)
+				wbuf[f * pb_ch + c] = c < 2 ? a : 0;
+			if (pulse >= 0 && ++pulse >= IMPULSE_W)
+				pulse = -1;
+		}
+		snd_pcm_sframes_t w = snd_pcm_writei(pb, wbuf, period);
+		if (w < 0) {
+			xruns++;
+			break;
+		}
+	}
+	if (!hits)
+		fprintf(stderr, "no impulse detected\n");
+	else
+		printf("impulses=%ld extra_min=%ld extra_max=%ld extra_avg=%.1f "
+		       "reported_avg=%.1f measured_avg=%.1f xruns=%d\n",
+		       hits, emin, emax, esum / hits, rsum / hits, msum / hits,
+		       xruns);
+	free(wbuf);
+	free(cbuf);
+	free(pred);
+	free(rep);
+	free(wpos);
+	return hits ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
 	int rate = 48000;
 	int det_ch = 10;		/* loopback = words 12/13 = ch10/11 */
-	int cap_first = 0, split = 0;
+	int cap_first = 0, split = 0, delay = 0;
+	static const struct option lopts[] = {
+		{ "delay", no_argument, NULL, 'D' },
+		{ "help", no_argument, NULL, 'h' },
+		{ NULL, 0, NULL, 0 },
+	};
 	snd_pcm_uframes_t cperiod = 0, cbuffer = 0;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "r:d:c:f:h")) != -1) {
+	while ((opt = getopt_long(argc, argv, "r:d:c:f:Dh", lopts, NULL)) != -1) {
 		switch (opt) {
 		case 'r':
 			rate = atoi(optarg);
@@ -142,6 +260,9 @@ int main(int argc, char **argv)
 			break;
 		case 'f':
 			cap_first = optarg[0] == 'c';
+			break;
+		case 'D':
+			delay = 1;
 			break;
 		default:
 			usage(argv[0]);
@@ -169,6 +290,10 @@ int main(int argc, char **argv)
 		cbuffer = buffer;
 	}
 	split = cperiod != period;
+	if (delay && split) {
+		fprintf(stderr, "--delay needs the same period in both directions\n");
+		return 2;
+	}
 	snprintf(dev, sizeof(dev), "hw:%s,0", card);
 	snd_pcm_hw_params_alloca(&hp);
 	snd_pcm_sw_params_alloca(&sw);
@@ -194,7 +319,7 @@ int main(int argc, char **argv)
 	int32_t *pbuf = calloc(buffer * pb_ch, sizeof(int32_t));
 	int32_t *z = calloc(period * pb_ch, sizeof(int32_t));
 	int32_t *cbuf = calloc(cperiod * cap_ch, sizeof(int32_t));
-	for (int i = 0; i < (int)buffer; i++)
+	for (int i = 0; i < (int)buffer && !delay; i++)
 		if ((i % 4800) < 60)
 			for (int c = 0; c < pb_ch && c < 2; c++)
 				pbuf[i * pb_ch + c] = 0x40000000;
@@ -240,6 +365,15 @@ int main(int argc, char **argv)
 		fprintf(stderr, "start: %s (cap state=%s)\n", snd_strerror(err),
 			snd_pcm_state_name(snd_pcm_state(cap)));
 		goto fail;
+	}
+
+	if (delay) {
+		int rc = run_delay(pb, cap, pb_ch, cap_ch, det_ch, rate, period, dur);
+
+		snd_pcm_drop(pb);
+		snd_pcm_close(cap);
+		snd_pcm_close(pb);
+		return rc;
 	}
 
 	/* With different periods, started together; from here each

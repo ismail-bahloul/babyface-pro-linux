@@ -368,6 +368,11 @@ struct snd_usb_babyface {
 	struct snd_pcm_substream __rcu *subs[2];
 	unsigned long hw_ptr[2];
 	unsigned long prev_period[2];
+	/* For runtime->delay: when the last IN URB completed, and the OUT
+	 * URBs in flight.  Under ->lock.
+	 */
+	ktime_t in_done;
+	unsigned int out_inflight;
 
 	/* mixer state (no gain readback exists - host-side mirror) */
 	u16 preamp;			/* 48V/PAD bits, base 0x0c */

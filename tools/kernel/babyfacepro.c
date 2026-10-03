@@ -818,6 +818,17 @@ static void babyface_urb_ok(struct snd_usb_babyface *chip)
 		;
 }
 
+/* An OUT URB that is not resubmitted leaves the queue. */
+static void bf_out_lost(struct snd_usb_babyface *chip)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&chip->lock, flags);
+	if (chip->out_inflight)
+		chip->out_inflight--;
+	spin_unlock_irqrestore(&chip->lock, flags);
+}
+
 static void babyface_complete_in(struct urb *urb)
 {
 	struct snd_usb_babyface *chip = urb->context;
@@ -838,6 +849,9 @@ static void babyface_complete_in(struct urb *urb)
 		goto resubmit;
 	}
 	babyface_urb_ok(chip);
+	spin_lock_irqsave(&chip->lock, flags);
+	chip->in_done = ktime_get();
+	spin_unlock_irqrestore(&chip->lock, flags);
 
 	/* The session outlives a substream that is closed while the other
 	 * direction still runs: close() waits out this RCU section.
@@ -889,8 +903,10 @@ static void babyface_complete_out(struct urb *urb)
 			return;		/* killed, or the device is gone */
 		dev_dbg_ratelimited(&chip->dev->dev, "OUT urb status %d\n",
 				    urb->status);
-		if (babyface_urb_error(chip))
+		if (babyface_urb_error(chip)) {
+			bf_out_lost(chip);
 			return;
+		}
 		goto resubmit;
 	}
 	babyface_urb_ok(chip);
@@ -927,6 +943,7 @@ resubmit:
 	if (ret < 0) {
 		dev_err_ratelimited(&chip->dev->dev,
 				    "OUT resubmit failed: %d\n", ret);
+		bf_out_lost(chip);
 		babyface_urb_error(chip);
 	}
 }
@@ -1079,6 +1096,9 @@ static int babyface_stream_start(struct snd_usb_babyface *chip)
 		if (ret < 0)
 			goto err;
 	}
+	spin_lock_irq(&chip->lock);
+	chip->out_inflight = chip->urbs_active;
+	spin_unlock_irq(&chip->lock);
 	/* Session arm (cap_audio frame 5829, after the URBs). */
 	ret = bf_vendor_write(chip, BF_REQ_SESSION_ARM, 0x0000, 0xc000);
 	if (ret < 0)
@@ -1537,6 +1557,59 @@ static int babyface_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 	return -EINVAL;
 }
 
+/* The audio between hw_ptr and the converters, for runtime->delay.
+ * hw_ptr moves a URB at a time: playback when a URB is refilled, capture
+ * when one completes.  A refilled OUT URB goes to the back of the queue,
+ * so the next frame the application writes waits behind the URBs in
+ * flight, whatever they carry.
+ *
+ * Both directions take their time from the last IN completion, the
+ * point where the device has finished a URB's worth of recording.  By
+ * then it has also played one of the OUT URBs still counted in flight;
+ * that URB's completion only says its data reached the device.  Since
+ * the IN completion, the device has recorded, and played, the time
+ * elapsed, measured with ktime and never more than one URB.
+ * snd-usb-audio estimates it from the USB frame counter, which counts
+ * in 1 ms steps, longer than a 32-frame URB at 48 kHz.  With one time
+ * reference the estimate cancels in the sum of the two delays, the
+ * round trip an application compensates a recording with.
+ *
+ * On top of that queue each direction adds a fixed delay inside the
+ * device, per speed, in frames at the stream rate.  The values are what
+ * RME's Windows driver reports for its ASIO buffer on a 2015 Babyface
+ * Pro, which RTL Utility measured to within one frame.  Playback is
+ * 8 + 32 x the speed: the device's OUT buffer and the DA converter,
+ * the same on the FS.  Capture is lowered by 7 frames to the FS, whose
+ * AD converter is 5 samples against 12 on the 2015 model, since the
+ * two share VID:PID and bcdDevice.  So the 2015 model is reported a
+ * little short, and neither model too long.  Caller holds chip->lock.
+ */
+static const struct {
+	u8 playback;
+	u8 capture;
+} bf_device_delay[] = {
+	[BF_ALT_1] = { 40, 16 },
+	[BF_ALT_2] = { 72, 24 },
+	[BF_ALT_3] = { 136, 38 },
+};
+
+static snd_pcm_uframes_t bf_delay(struct snd_usb_babyface *chip,
+				  struct snd_pcm_substream *subs)
+{
+	s64 ns = ktime_to_ns(ktime_sub(ktime_get(), chip->in_done));
+	unsigned int urb = chip->urb_frames;
+	unsigned int moved;
+
+	moved = ns > 0 ? min_t(u64, div_u64((u64)ns * subs->runtime->rate,
+					    NSEC_PER_SEC), urb) : 0;
+	if (subs->stream == SNDRV_PCM_STREAM_CAPTURE)
+		return moved + bf_device_delay[chip->alt].capture;
+	if (chip->out_inflight < 2)
+		return 0;
+	return (chip->out_inflight - 1) * urb - moved +
+	       bf_device_delay[chip->alt].playback;
+}
+
 static snd_pcm_uframes_t babyface_pcm_pointer(struct snd_pcm_substream *subs)
 {
 	struct snd_usb_babyface *chip = snd_pcm_substream_chip(subs);
@@ -1545,6 +1618,7 @@ static snd_pcm_uframes_t babyface_pcm_pointer(struct snd_pcm_substream *subs)
 
 	spin_lock_irqsave(&chip->lock, flags);
 	pos = chip->hw_ptr[subs->stream] % subs->runtime->buffer_size;
+	subs->runtime->delay = bf_delay(chip, subs);
 	spin_unlock_irqrestore(&chip->lock, flags);
 	return pos;
 }
