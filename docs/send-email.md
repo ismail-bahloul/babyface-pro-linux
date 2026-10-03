@@ -68,22 +68,34 @@ missing or wrong. He has been asked for the name and address he wants
 
 ## Send
 
+The current series is v6 (`patches/v6-*.patch`).  Run it once with
+`--dry-run` first: it prints every mail with its recipients and sends
+nothing.
+
 ```sh
 cd /home/iswad/DATA/05_Code/Projects/babyface-pro-linux
 
 git send-email \
   --from='Ismaïl Bahloul <i.bahloul01@gmail.com>' \
   --to=linux-sound@vger.kernel.org \
+  --cc=tiwai@suse.com \
+  --cc=perex@perex.cz \
   --cc=linux-usb@vger.kernel.org \
   --cc=alsa-devel@alsa-project.org \
-  --cc=perex@perex.cz \
-  --cc=tiwai@suse.com \
   --cc=linux-kernel@vger.kernel.org \
-  patches/v4-0000-cover-letter.patch \
-  patches/v4-0001-ALSA-usb-add-RME-Babyface-Pro-driver-proprietary-.patch \
-  patches/v4-0002-ALSA-usb-babyfacepro-add-the-front-panel-poll-and.patch \
-  patches/v4-0003-ALSA-usb-babyfacepro-add-the-hardware-DSP-EQ.patch
+  --cc=corbet@lwn.net \
+  --cc=skhan@linuxfoundation.org \
+  --cc=rdunlap@infradead.org \
+  --cc=linux-doc@vger.kernel.org \
+  patches/v6-00*.patch
 ```
+
+The last four Cc lines are the Documentation reviewers `get_maintainer.pl`
+names for patch 8.  `git send-email` adds David Fredman by itself, from
+his `Co-developed-by`/`Signed-off-by` trailers (patches 1, 2, 3, 5, 6).
+`get_maintainer.pl` also lists "Mark Brown": that is the linux-next
+"Add linux-next specific files" commit, not a contributor to this
+driver, so he is left out.
 
 At the `Password for 'smtp.gmail.com':` prompt, paste the App Password
 (spaces are OK). At the `Send this email?` prompt, `a` confirms all
