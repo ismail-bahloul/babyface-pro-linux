@@ -1325,9 +1325,8 @@ static int bf_dim_get(struct snd_kcontrol *kctl,
 	return 0;
 }
 
-/* Apply DIM on the wire.  chip->mutex must be held: this is reached both
- * from the ALSA control and from the front-panel poll, and taking the
- * lock here instead would self-deadlock one of the two.
+/* Apply DIM on the wire.  chip->mutex must be held by the caller, the
+ * "Dim Switch" put.
  */
 static int bf_dim_apply(struct snd_usb_babyface *chip, bool on)
 {
