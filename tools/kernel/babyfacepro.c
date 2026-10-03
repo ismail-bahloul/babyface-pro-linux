@@ -1122,7 +1122,14 @@ void babyface_stream_work(struct work_struct *work)
 /* -- PCM --------------------------- */
 
 static const struct snd_pcm_hardware babyface_pcm_hw = {
-	.info = SNDRV_PCM_INFO_INTERLEAVED |
+	/* The URB handlers copy to and from the vmalloc'ed ring the core
+	 * allocates (rt->dma_area), and read appl_ptr from the control page,
+	 * so the ring can be mapped by the application as well - which JACK
+	 * and other mmap-only clients need.
+	 */
+	.info = SNDRV_PCM_INFO_MMAP |
+		SNDRV_PCM_INFO_MMAP_VALID |
+		SNDRV_PCM_INFO_INTERLEAVED |
 		SNDRV_PCM_INFO_BLOCK_TRANSFER,
 	.formats = SNDRV_PCM_FMTBIT_S32_LE,
 	.rate_min = 32000,

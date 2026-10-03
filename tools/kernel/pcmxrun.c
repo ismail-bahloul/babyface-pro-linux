@@ -11,7 +11,12 @@
 // echo the playback at a fixed ~-27 dB — that RMS is a signal-integrity
 // check that needs no microphone.
 //
-// Usage: pcmxrun <card> <rate> <period> <buffer> <dur_s>
+// With PCMX_MMAP=1 in the environment both streams are opened for mmap
+// access and filled through snd_pcm_mmap_begin()/commit(), the way JACK
+// does it; the default is read/write access.  PCMX_PBCH=n sets the playback
+// channel count (default 2; 12 is what JACK opens), the tone stays on ch 0/1.
+//
+// Usage: [PCMX_MMAP=1] pcmxrun <card> <rate> <period> <buffer> <dur_s>
 // Prints: rate=<n> period=<n> buffer=<n> pb_xruns=<n> cap_xruns=<n>
 //         tap_rms=<dBFS|-inf> PASS|FAIL   (exit 0 = PASS)
 #include <alsa/asoundlib.h>
@@ -26,7 +31,7 @@
 #endif
 
 static snd_pcm_t *pb, *cap;
-static int rate, pb_ch, cap_ch, tap_ok;
+static int rate, pb_ch, cap_ch, tap_ok, use_mmap;
 static snd_pcm_uframes_t period;
 static long total;			/* frames per direction for the run */
 static volatile long written = 0, read_total = 0;
@@ -52,6 +57,62 @@ static void gen(snd_pcm_uframes_t frames, int ch, int32_t *buf)
 	}
 }
 
+/* One chunk through snd_pcm_mmap_begin()/commit(): returns the frames moved,
+ * or a negative error as readi/writei would (-EPIPE on an xrun).
+ */
+static snd_pcm_sframes_t xfer_mmap(snd_pcm_t *p, int32_t *buf, snd_pcm_uframes_t n,
+				   int ch, int is_write)
+{
+	snd_pcm_uframes_t done = 0;
+	int idle = 0;
+
+	while (done < n) {
+		const snd_pcm_channel_area_t *areas;
+		snd_pcm_uframes_t off, frames = n - done;
+		snd_pcm_sframes_t avail = snd_pcm_avail_update(p), c;
+		char *base;
+		int e;
+
+		if (avail < 0)
+			return avail;
+		if (avail == 0) {
+			e = snd_pcm_wait(p, 1000);
+			if (e < 0)
+				return e;
+			if (e == 0 && ++idle > 5)
+				return -ETIMEDOUT;
+			continue;
+		}
+		if (frames > (snd_pcm_uframes_t)avail)
+			frames = avail;
+		e = snd_pcm_mmap_begin(p, &areas, &off, &frames);
+		if (e < 0)
+			return e;
+		base = (char *)areas[0].addr + areas[0].first / 8 +
+		       off * (areas[0].step / 8);
+		if (is_write)
+			memcpy(base, buf + done * ch, frames * ch * sizeof(int32_t));
+		else
+			memcpy(buf + done * ch, base, frames * ch * sizeof(int32_t));
+		c = snd_pcm_mmap_commit(p, off, frames);
+		if (c < 0)
+			return c;
+		done += c;
+		idle = 0;
+	}
+	return done;
+}
+
+static snd_pcm_sframes_t xwrite(snd_pcm_t *p, int32_t *buf, snd_pcm_uframes_t n, int ch)
+{
+	return use_mmap ? xfer_mmap(p, buf, n, ch, 1) : snd_pcm_writei(p, buf, n);
+}
+
+static snd_pcm_sframes_t xread(snd_pcm_t *p, int32_t *buf, snd_pcm_uframes_t n, int ch)
+{
+	return use_mmap ? xfer_mmap(p, buf, n, ch, 0) : snd_pcm_readi(p, buf, n);
+}
+
 static void *writer_thread(void *arg)
 {
 	int32_t *chunk = calloc(period * pb_ch, sizeof(int32_t));
@@ -59,7 +120,7 @@ static void *writer_thread(void *arg)
 		return NULL;
 	while (written < total) {
 		gen(period, pb_ch, chunk);
-		snd_pcm_sframes_t w = snd_pcm_writei(pb, chunk, period);
+		snd_pcm_sframes_t w = xwrite(pb, chunk, period, pb_ch);
 		if (w < 0) {
 			if (w == -EPIPE) {
 				pb_xruns++;
@@ -83,7 +144,7 @@ static void *reader_thread(void *arg)
 	if (!cbuf)
 		return NULL;
 	while (read_total < total) {
-		snd_pcm_sframes_t r = snd_pcm_readi(cap, cbuf, period);
+		snd_pcm_sframes_t r = xread(cap, cbuf, period, cap_ch);
 		if (r < 0) {
 			if (r == -EPIPE) {
 				cap_xruns++;
@@ -111,7 +172,7 @@ static void *reader_thread(void *arg)
 int main(int argc, char **argv)
 {
 	if (argc != 6) {
-		fprintf(stderr, "usage: %s card rate period buffer dur_s\n", argv[0]);
+		fprintf(stderr, "usage: [PCMX_MMAP=1] %s card rate period buffer dur_s\n", argv[0]);
 		return 2;
 	}
 	int card = atoi(argv[1]);
@@ -119,7 +180,8 @@ int main(int argc, char **argv)
 	period = atoi(argv[3]);
 	snd_pcm_uframes_t buffer = atoi(argv[4]);
 	int dur = atoi(argv[5]);
-	pb_ch = 2;
+	pb_ch = getenv("PCMX_PBCH") ? atoi(getenv("PCMX_PBCH")) : 2;
+	use_mmap = getenv("PCMX_MMAP") && atoi(getenv("PCMX_MMAP"));
 	/* alt-1 rates have the 14-word frame (56 B): words 12/13 = the
 	 * playback tap at ch10/11.  alt 2/3 frames are 10/8 words, with no
 	 * tap channels, so only the alt-1 rates (<= 48 kHz) carry it. */
@@ -140,7 +202,13 @@ int main(int argc, char **argv)
 		goto fail;
 
 	snd_pcm_hw_params_any(pb, hp);
-	snd_pcm_hw_params_set_access(pb, hp, SND_PCM_ACCESS_RW_INTERLEAVED);
+	if ((err = snd_pcm_hw_params_set_access(pb, hp, use_mmap ?
+			SND_PCM_ACCESS_MMAP_INTERLEAVED :
+			SND_PCM_ACCESS_RW_INTERLEAVED)) < 0) {
+		fprintf(stderr, "pcmxrun: %s access not available on playback\n",
+			use_mmap ? "mmap" : "read/write");
+		goto fail;
+	}
 	snd_pcm_hw_params_set_format(pb, hp, SND_PCM_FORMAT_S32_LE);
 	snd_pcm_hw_params_set_channels(pb, hp, pb_ch);
 	snd_pcm_hw_params_set_rate(pb, hp, rate, 0);
@@ -150,7 +218,13 @@ int main(int argc, char **argv)
 		goto fail;
 
 	snd_pcm_hw_params_any(cap, hp);
-	snd_pcm_hw_params_set_access(cap, hp, SND_PCM_ACCESS_RW_INTERLEAVED);
+	if ((err = snd_pcm_hw_params_set_access(cap, hp, use_mmap ?
+			SND_PCM_ACCESS_MMAP_INTERLEAVED :
+			SND_PCM_ACCESS_RW_INTERLEAVED)) < 0) {
+		fprintf(stderr, "pcmxrun: %s access not available on capture\n",
+			use_mmap ? "mmap" : "read/write");
+		goto fail;
+	}
 	snd_pcm_hw_params_set_format(cap, hp, SND_PCM_FORMAT_S32_LE);
 	snd_pcm_hw_params_set_channels(cap, hp, cap_ch);
 	snd_pcm_hw_params_set_rate(cap, hp, rate, 0);
@@ -178,7 +252,7 @@ int main(int argc, char **argv)
 			if (queued + (long)n > (long)buffer)
 				n = (snd_pcm_uframes_t)(buffer - queued);
 			gen(n, pb_ch, chunk);
-			snd_pcm_sframes_t w = snd_pcm_writei(pb, chunk, n);
+			snd_pcm_sframes_t w = xwrite(pb, chunk, n, pb_ch);
 			if (w < 0) {
 				err = (int)w;
 				free(chunk);
