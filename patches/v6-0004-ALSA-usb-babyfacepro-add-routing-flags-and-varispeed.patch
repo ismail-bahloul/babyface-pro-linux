@@ -1,6 +1,6 @@
-From c0f5888dfcfa53a6e999922948068604e50484e6 Mon Sep 17 00:00:00 2001
+From 67f71d1795ee62442f145ba793ccd6647e56c48e Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Tue, 29 Sep 2026 07:45:23 +0000
+Date: Sat, 3 Oct 2026 20:16:07 +0200
 Subject: [RFC PATCH v6 4/8] ALSA: usb: babyfacepro: add routing flags and
  varispeed pitch
 MIME-Version: 1.0
@@ -20,13 +20,13 @@ moves the level DIM releases back to.
 
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---
- sound/usb/babyfacepro/babyfacepro-ctl.c | 651 +++++++++++++++++++++++-
+ sound/usb/babyfacepro/babyfacepro-ctl.c | 650 +++++++++++++++++++++++-
  sound/usb/babyfacepro/babyfacepro.c     | 162 +++++-
  sound/usb/babyfacepro/babyfacepro.h     |  39 +-
- 3 files changed, 839 insertions(+), 13 deletions(-)
+ 3 files changed, 838 insertions(+), 13 deletions(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index 988766c59..25c6d2de3 100644
+index 988766c59..f72879502 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
 @@ -10,8 +10,10 @@
@@ -63,7 +63,7 @@ index 988766c59..25c6d2de3 100644
  	ret = 1;
  out:
  	mutex_unlock(&chip->mutex);
-@@ -1450,3 +1459,643 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
+@@ -1450,3 +1459,642 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
  	return 0;
  }
  
@@ -379,9 +379,8 @@ index 988766c59..25c6d2de3 100644
 +	return 0;
 +}
 +
-+/* Apply DIM on the wire.  chip->mutex must be held: this is reached both
-+ * from the ALSA control and from the front-panel poll, and taking the
-+ * lock here instead would self-deadlock one of the two.
++/* Apply DIM on the wire.  chip->mutex must be held by the caller, the
++ * "Dim Switch" put.
 + */
 +static int bf_dim_apply(struct snd_usb_babyface *chip, bool on)
 +{
@@ -708,7 +707,7 @@ index 988766c59..25c6d2de3 100644
 +}
 +
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index fc76b7293..9a1844c7a 100644
+index 1d7aa832b..0678bea58 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
 @@ -105,14 +105,23 @@ int bf_vendor_read(struct snd_usb_babyface *chip, u8 req, u16 idx, u8 *buf)
@@ -900,7 +899,7 @@ index fc76b7293..9a1844c7a 100644
  		ret = 1;
  		break;
  	}
-@@ -1392,6 +1518,14 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1640,6 +1766,14 @@ static int babyface_probe(struct usb_interface *intf,
  			dev_err(&intf->dev, "default mixer restore failed: %d\n", err);
  			goto error;
  		}
@@ -915,7 +914,7 @@ index fc76b7293..9a1844c7a 100644
  	} else if (err < 0) {
  		dev_err(&intf->dev, "mixer state restore failed: %d\n", err);
  		goto error;
-@@ -1465,6 +1599,12 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1713,6 +1847,12 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -929,10 +928,10 @@ index fc76b7293..9a1844c7a 100644
  	if (err < 0) {
  		dev_err(&intf->dev, "snd_card_register failed: %d\n", err);
 diff --git a/sound/usb/babyfacepro/babyfacepro.h b/sound/usb/babyfacepro/babyfacepro.h
-index f81419fc5..5b16c8146 100644
+index 80848da06..783ea03ac 100644
 --- a/sound/usb/babyfacepro/babyfacepro.h
 +++ b/sound/usb/babyfacepro/babyfacepro.h
-@@ -105,9 +105,16 @@
+@@ -115,9 +115,16 @@
  
  /* Host settings-state word carried by the BF_REG_KEEPALIVE_SETTINGS
   * keepalive (PROTOCOL.md "keepalive 0x10 0x05CF wVal = host settings-
@@ -950,7 +949,7 @@ index f81419fc5..5b16c8146 100644
  
  /* Preamp state byte (0x17, wIdx 0x003F - full state, verified).
   * NOTE 2026-08-26 (cap_reflevel3.pcap): the 0x0C "base" is NOT a
-@@ -164,6 +171,15 @@
+@@ -174,6 +181,15 @@
  #define BF_REG_LOWMAP_BASE_L		0x0000	/* + idx_l */
  #define BF_REG_LOWMAP_BASE_R		0x001a	/* + idx_r */
  
@@ -966,7 +965,7 @@ index f81419fc5..5b16c8146 100644
  /* The "cross" register block within each output: the L-registers sit at
   * odd offsets 5..23 and the R-registers at even offsets 4..22 (the stereo
   * source pairs that can be cross-linked).  bf_crosspoint_clear_cross()
-@@ -296,6 +312,16 @@ struct snd_usb_babyface {
+@@ -316,6 +332,16 @@ struct snd_usb_babyface {
  					 * (0 = +4dBu, the default)
  					 */
  	struct snd_kcontrol *trim_kctl[4]; /* for snd_ctl_notify */
@@ -983,7 +982,7 @@ index f81419fc5..5b16c8146 100644
  };
  
  /* The mixer state cached across interface re-probes (see
-@@ -314,6 +340,15 @@ struct bf_saved {
+@@ -334,6 +360,15 @@ struct bf_saved {
  	int trim[4];
  	bool split[6];
  	int ref_level;
@@ -999,7 +998,7 @@ index f81419fc5..5b16c8146 100644
  };
  
  struct bf_rate {
-@@ -367,6 +402,8 @@ int bf_trim_apply(struct snd_usb_babyface *chip, int mic, int trim_db2);
+@@ -387,6 +422,8 @@ int bf_trim_apply(struct snd_usb_babyface *chip, int mic, int trim_db2);
  int bf_gain_max_db(int mic);
  int bf_gain_db(int mic, u8 raw);
  u8 bf_gain_raw(int mic, int db);
@@ -1009,5 +1008,5 @@ index f81419fc5..5b16c8146 100644
  /* Master gain-law helpers (babyfacepro-ctl.c). */
  int bf_master_half_db(u16 vol16);	/* 16-bit master -> dBx2 */
 -- 
-2.55.0
+2.56.0
 

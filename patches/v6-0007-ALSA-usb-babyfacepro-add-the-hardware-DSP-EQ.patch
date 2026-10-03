@@ -1,6 +1,6 @@
-From 22c4ee4df8b04915128c2b996f69a6363fc16ed0 Mon Sep 17 00:00:00 2001
+From 9ab7715d9d6a6d85d78fe173a60b4472ae94a24b Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Tue, 29 Sep 2026 07:45:24 +0000
+Date: Sat, 3 Oct 2026 20:16:08 +0200
 Subject: [RFC PATCH v6 7/8] ALSA: usb: babyfacepro: add the hardware DSP EQ
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -30,7 +30,7 @@ Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
  3 files changed, 658 insertions(+), 2 deletions(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index f5566520e..f55f96f22 100644
+index 183647e25..0c04972e4 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
 @@ -4,7 +4,8 @@
@@ -43,7 +43,7 @@ index f5566520e..f55f96f22 100644
   *
   * See babyfacepro.h for the shared device state and register map,
   * and babyfacepro.c for the core driver (protocol, PCM streaming,
-@@ -3255,3 +3256,598 @@ int babyface_create_panel(struct snd_usb_babyface *chip)
+@@ -3331,3 +3332,598 @@ int babyface_create_panel(struct snd_usb_babyface *chip)
  	return 0;
  }
  
@@ -643,7 +643,7 @@ index f5566520e..f55f96f22 100644
 +}
 +
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index 4f17465ac..d83095e7c 100644
+index 18b8ac08d..fb2eba392 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
 @@ -537,6 +537,7 @@ void bf_state_save(struct snd_usb_babyface *chip)
@@ -651,18 +651,18 @@ index 4f17465ac..d83095e7c 100644
  	s->fx_send = chip->fx_send;
  	s->dim = chip->dim;
 +	memcpy(s->eq, chip->eq, sizeof(s->eq));
+ 	memcpy(s->panel_sel, chip->panel_sel, sizeof(s->panel_sel));
  	mutex_unlock(&bf_saved_mutex);
  }
- 
-@@ -574,6 +575,7 @@ int bf_state_restore(struct snd_usb_babyface *chip)
+@@ -575,6 +576,7 @@ int bf_state_restore(struct snd_usb_babyface *chip)
  		chip->width = s->width;
  		chip->fx_send = s->fx_send;
  		chip->dim = s->dim;
 +		memcpy(chip->eq, s->eq, sizeof(chip->eq));
+ 		memcpy(chip->panel_sel, s->panel_sel, sizeof(chip->panel_sel));
  		ret = 1;
  		break;
- 	}
-@@ -585,6 +587,12 @@ int bf_state_restore(struct snd_usb_babyface *chip)
+@@ -587,6 +589,12 @@ int bf_state_restore(struct snd_usb_babyface *chip)
  	ret = babyface_restore_state(chip);
  	if (ret == 0)
  		ret = bf_state_apply_flags(chip);
@@ -675,8 +675,8 @@ index 4f17465ac..d83095e7c 100644
  	mutex_unlock(&chip->mutex);
  	return ret ? ret : 1;
  }
-@@ -1233,6 +1241,8 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
- 		chip->rate = r->rate;
+@@ -1367,6 +1375,8 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
+ 		new_rate = true;
  		chip->alt = r->alt;
  		chip->frame_bytes = r->frame_bytes;
 +		/* The DSP EQ coefficients depend on fs: re-upload. */
@@ -684,7 +684,7 @@ index 4f17465ac..d83095e7c 100644
  		dev_dbg(&chip->dev->dev, "rate %u Hz (alt %u)\n",
  			chip->rate, chip->alt);
  	}
-@@ -1512,6 +1522,8 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1763,6 +1773,8 @@ static int babyface_probe(struct usb_interface *intf,
  	else
  		chip->preamp = st[0];
  
@@ -693,7 +693,7 @@ index 4f17465ac..d83095e7c 100644
  	/* Restore the mixer state saved at the last disconnect (if any);
  	 * the device keeps its registers across a usbfs detach, but the
  	 * cold init above cleared them, so push the user's settings back.
-@@ -1620,6 +1632,20 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1871,6 +1883,20 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -714,7 +714,7 @@ index 4f17465ac..d83095e7c 100644
  	err = snd_card_register(chip->card);
  	if (err < 0) {
  		dev_err(&intf->dev, "snd_card_register failed: %d\n", err);
-@@ -1747,6 +1773,13 @@ static int babyface_resume(struct usb_interface *intf)
+@@ -1998,6 +2024,13 @@ static int babyface_resume(struct usb_interface *intf)
  	if (err < 0)
  		goto out;
  	err = bf_state_apply_flags(chip);
@@ -729,7 +729,7 @@ index 4f17465ac..d83095e7c 100644
  	mutex_unlock(&chip->mutex);
  	if (!err)
 diff --git a/sound/usb/babyfacepro/babyfacepro.h b/sound/usb/babyfacepro/babyfacepro.h
-index c3f32829a..668ef371c 100644
+index 1959bdf2e..ba036df5e 100644
 --- a/sound/usb/babyfacepro/babyfacepro.h
 +++ b/sound/usb/babyfacepro/babyfacepro.h
 @@ -14,7 +14,7 @@
@@ -741,7 +741,7 @@ index c3f32829a..668ef371c 100644
   *
   * The protocol (vendor requests + 14x32-bit frame layout) was
   * reverse-engineered from Windows captures and validated on hardware -
-@@ -286,6 +286,24 @@ extern const u8 bf_xpoint_block[6];
+@@ -296,6 +296,24 @@ extern const u8 bf_xpoint_block[6];
   */
  #define BF_SRC_PB1			8
  
@@ -766,8 +766,8 @@ index c3f32829a..668ef371c 100644
  struct snd_usb_babyface {
  	struct snd_card *card;
  	struct usb_device *dev;
-@@ -420,6 +438,9 @@ struct snd_usb_babyface {
- 	struct snd_kcontrol *panel_kctl[7]; /* for snd_ctl_notify */
+@@ -458,6 +476,9 @@ struct snd_usb_babyface {
+ 	struct snd_kcontrol *panel_select_kctl[3]; /* per IN pair, likewise */
  	struct snd_kcontrol *dim_press_kctl;
  	u32 dim_press_count;		/* front-panel DIM presses, wraps */
 +
@@ -776,15 +776,15 @@ index c3f32829a..668ef371c 100644
  };
  
  /* The mixer state cached across interface re-probes/resume (see
-@@ -447,6 +468,7 @@ struct bf_saved {
+@@ -485,6 +506,7 @@ struct bf_saved {
  	int width;
  	u16 fx_send;
  	bool dim;
 +	struct bf_eq_channel eq[4];
+ 	s8 panel_sel[3];
  };
  
- struct bf_rate {
-@@ -506,6 +528,11 @@ int babyface_create_panel(struct snd_usb_babyface *chip);
+@@ -545,6 +567,11 @@ int babyface_create_panel(struct snd_usb_babyface *chip);
  void babyface_panel_start(struct snd_usb_babyface *chip);
  void babyface_panel_stop(struct snd_usb_babyface *chip);
  void babyface_panel_work(struct work_struct *work);
@@ -797,5 +797,5 @@ index c3f32829a..668ef371c 100644
  /* Master gain-law helpers (babyfacepro-ctl.c). */
  int bf_master_half_db(u16 vol16);	/* 16-bit master -> dBx2 */
 -- 
-2.55.0
+2.56.0
 

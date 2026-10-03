@@ -1,6 +1,6 @@
-From 820073e0006483821d7fbe78f4fde93e49641e46 Mon Sep 17 00:00:00 2001
+From c7be4c3fa698023feb6951d94b5e42732cfc36c7 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Tue, 29 Sep 2026 07:45:23 +0000
+Date: Sat, 3 Oct 2026 20:16:07 +0200
 Subject: [RFC PATCH v6 2/8] ALSA: usb: babyfacepro: add output masters and
  crosspoint routing
 MIME-Version: 1.0
@@ -763,7 +763,7 @@ index 000000000..6ef29aa27
 +}
 +
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index 564c0d410..bf0e9d988 100644
+index 8f8667083..82ec98346 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
 @@ -3,9 +3,11 @@
@@ -916,7 +916,7 @@ index 564c0d410..bf0e9d988 100644
  /* -- PCM data path ------------------------- */
  
  static bool babyface_capture_copy(struct snd_usb_babyface *chip,
-@@ -1145,6 +1276,26 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1393,6 +1524,26 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -943,7 +943,7 @@ index 564c0d410..bf0e9d988 100644
  	/* Keep the allocation size independent of the active USB mode. */
  	urbsize = BF_WORDS_PER_FRAME * sizeof(u32) * chip->frames_per_urb;
  	chip->urbs_in = kcalloc(chip->nurbs, sizeof(*chip->urbs_in), GFP_KERNEL);
-@@ -1189,6 +1340,18 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1437,6 +1588,18 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -962,7 +962,7 @@ index 564c0d410..bf0e9d988 100644
  	err = snd_card_register(chip->card);
  	if (err < 0) {
  		dev_err(&intf->dev, "snd_card_register failed: %d\n", err);
-@@ -1237,6 +1400,11 @@ static void babyface_disconnect(struct usb_interface *intf)
+@@ -1485,6 +1648,11 @@ static void babyface_disconnect(struct usb_interface *intf)
  		babyface_stream_kill(chip);
  	mutex_unlock(&chip->mutex);
  	cancel_work_sync(&chip->stream_work);
@@ -974,7 +974,7 @@ index 564c0d410..bf0e9d988 100644
  	/* Balance the probe()-time usb_disable_autosuspend(): the usb_device
  	 * outlives this interface claim (a usbfs detach re-probes without
  	 * the physical device ever disconnecting), so leaving autosuspend
-@@ -1276,7 +1444,12 @@ static int __init babyface_init(void)
+@@ -1524,7 +1692,12 @@ static int __init babyface_init(void)
  
  static void __exit babyface_exit(void)
  {
@@ -988,7 +988,7 @@ index 564c0d410..bf0e9d988 100644
  
  module_init(babyface_init);
 diff --git a/sound/usb/babyfacepro/babyfacepro.h b/sound/usb/babyfacepro/babyfacepro.h
-index ca0e91d74..84d5b7a03 100644
+index 60ab0c387..9694cb9a7 100644
 --- a/sound/usb/babyfacepro/babyfacepro.h
 +++ b/sound/usb/babyfacepro/babyfacepro.h
 @@ -11,7 +11,10 @@
@@ -1003,7 +1003,7 @@ index ca0e91d74..84d5b7a03 100644
   *
   * The protocol (vendor requests + 14x32-bit frame layout) was
   * reverse-engineered from Windows captures and validated on hardware -
-@@ -80,8 +83,10 @@
+@@ -90,8 +93,10 @@
  
  /* Vendor requests (bmRequestType 0x40, value in wValue, no data phase). */
  #define BF_REQ_KEEPALIVE		0x10	/* settings word / stream trigger */
@@ -1014,7 +1014,7 @@ index ca0e91d74..84d5b7a03 100644
  #define BF_REQ_DDS			0x1b	/* clock quads */
  #define BF_REQ_STATUS_2			0x1c	/* read 4 B */
  #define BF_REQ_SESSION_START		0x1d
-@@ -104,6 +109,80 @@
+@@ -114,6 +119,80 @@
   */
  #define BF_SETTINGS_CLOCK_INTERNAL	0x0001
  
@@ -1095,10 +1095,10 @@ index ca0e91d74..84d5b7a03 100644
  struct snd_usb_babyface {
  	struct snd_card *card;
  	struct usb_device *dev;
-@@ -140,6 +219,25 @@ struct snd_usb_babyface {
- 	struct snd_pcm_substream __rcu *subs[2];
- 	unsigned long hw_ptr[2];
- 	unsigned long prev_period[2];
+@@ -160,6 +239,25 @@ struct snd_usb_babyface {
+ 	 */
+ 	ktime_t in_done;
+ 	unsigned int out_inflight;
 +
 +	/* mixer state (no gain readback exists - host-side mirror) */
 +	u8 flag_cnt;			/* 0xc000/0x4000/0x8000/0x0000 */
@@ -1121,7 +1121,7 @@ index ca0e91d74..84d5b7a03 100644
  };
  
  struct bf_rate {
-@@ -165,3 +263,26 @@ void babyface_stream_kill(struct snd_usb_babyface *chip);
+@@ -185,3 +283,26 @@ void babyface_stream_kill(struct snd_usb_babyface *chip);
  void babyface_pcm_stop_both(struct snd_usb_babyface *chip, snd_pcm_state_t state);
  void babyface_stream_work(struct work_struct *work);
  extern const struct snd_pcm_hw_constraint_list bf_rates_constraint;
@@ -1149,5 +1149,5 @@ index ca0e91d74..84d5b7a03 100644
 +int bf_master_16bit(int half_db);	/* dBx2 -> 16-bit master */
 +u8 bf_master_8bit(u16 vol16);		/* 16-bit master -> 8-bit companion */
 -- 
-2.55.0
+2.56.0
 

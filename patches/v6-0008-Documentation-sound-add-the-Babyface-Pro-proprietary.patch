@@ -1,6 +1,6 @@
-From 9b493a6e547d2a42e6926a0f656beb1d5d2fee8f Mon Sep 17 00:00:00 2001
+From 41f1401d574429c605c7887c80077906d9935290 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Tue, 29 Sep 2026 07:45:24 +0000
+Date: Sat, 3 Oct 2026 20:16:08 +0200
 Subject: [RFC PATCH v6 8/8] Documentation: sound: add the Babyface Pro
  proprietary-mode design doc
 MIME-Version: 1.0
@@ -19,17 +19,17 @@ not restating what the code comments already say inline.
 
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---
- Documentation/sound/cards/babyface-pro.rst | 168 +++++++++++++++++++++
+ Documentation/sound/cards/babyface-pro.rst | 193 +++++++++++++++++++++
  Documentation/sound/cards/index.rst        |   1 +
- 2 files changed, 169 insertions(+)
+ 2 files changed, 194 insertions(+)
  create mode 100644 Documentation/sound/cards/babyface-pro.rst
 
 diff --git a/Documentation/sound/cards/babyface-pro.rst b/Documentation/sound/cards/babyface-pro.rst
 new file mode 100644
-index 000000000..41e85b4c9
+index 000000000..f75b80886
 --- /dev/null
 +++ b/Documentation/sound/cards/babyface-pro.rst
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,193 @@
 +.. SPDX-License-Identifier: GPL-2.0
 +
 +=================================================
@@ -139,11 +139,26 @@ index 000000000..41e85b4c9
 +the previous one stopping comes up with the outputs silent, so a
 +session start waits until 50 ms have passed since the last stop.
 +
-+Both directions share one clock, so while a substream is set up the
-+rate belongs to it: ``open()`` offers a second client that rate alone,
-+and the sound server resamples, rather than the device changing rate
-+under a running stream - as with RME's own drivers, which grey the
-+sample rate out while a stream runs.
++Both directions share one clock, so while another application has the
++other direction set up, the rate belongs to it: ``open()`` offers that
++rate alone, and the sound server resamples, rather than the device
++changing rate under a running stream - as with RME's own drivers, which
++grey the sample rate out while a stream runs.  The application that
++holds both directions may change the rate or the buffer size itself, as
++a DAW does from its settings; the direction it left running then stops
++with an xrun and is set up again.
++
++The size of the URBs follows the period the application asks for, so
++the latency follows the application's buffer instead of a fixed queue:
++``hw_params`` splits the period into the fewest URBs of at most
++``frames_per_urb`` frames, each a whole number of the device's IN
++packets, and keeps two periods' worth in flight (at most ``nurbs``).
++The URB handlers copy to and from the ring the core allocates and take
++the application's position from the shared control page, so the ring can
++also be mapped by the application, which JACK requires.
++``runtime->delay`` reports the audio queued in the URBs plus the fixed
++delay of the converters and of the device, per speed, so that an
++application that uses ALSA directly can line up what it records.
 +
 +URB completions run in interrupt context; the work that needs to sleep
 +(stopping the session after repeated URB errors) runs from
@@ -191,13 +206,23 @@ index 000000000..41e85b4c9
 +Some panel state - which channel SELECT currently has chosen, for
 +instance - is not part of the 0x17 readback at all and exists only on
 +the device's own internal state machine, which the driver cannot
-+read.  That state is tracked host-side and deliberately re-synced to
-+a known value (nothing selected) for the first few seconds after
-+probe, because a stale alsactl-restored value would otherwise
-+silently desync from the physical LEDs.  The relevant code comments
-+(``babyface_panel_start()``, the ``panel_select_armed`` handling in
-+``bf_panel_tick()``) explain the specific desync scenarios this
-+guards against.
++read.  The unit keeps one such selection for each IN pair, across IN
++switches and even across a power cycle; its LEDs stay dark until the
++next SELECT press, which only shows the selection again, and later
++presses step it.  The driver follows the presses and exposes the
++selection of each pair as a "Front Panel Selection" control (index 0
++is Ch 1/2), so that alsactl keeps it across boots like any other
++mixer setting.  It cannot know what the unit holds before it has been
++told once, so a pair starts out unknown, and SET and the wheel then do
++nothing instead of acting on a channel that may not be the lit one;
++setting the control to what the LEDs show for the pair tells it.  A
++re-probe, which does not change the unit, keeps what the driver had,
++and the older values alsactl restores shortly after probe are ignored
++for a pair the driver already knows.  The stored values can be wrong
++only if the selection was changed while the driver was not running
++(the unit used on its own, or with another host).  The relevant code
++comments (``babyface_panel_start()``, the ``panel_select_armed``
++handling in ``bf_panel_tick()``) explain the details.
 diff --git a/Documentation/sound/cards/index.rst b/Documentation/sound/cards/index.rst
 index e68bbb13c..31051b7a4 100644
 --- a/Documentation/sound/cards/index.rst
@@ -211,5 +236,5 @@ index e68bbb13c..31051b7a4 100644
     bt87x
     maya44
 -- 
-2.55.0
+2.56.0
 

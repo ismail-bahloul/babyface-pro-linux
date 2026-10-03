@@ -504,7 +504,55 @@ sh tools/kernel/regress.sh --dur 1 --mixer-restore --disconnect-test
 /lib/modules/$(uname -r)/build/scripts/checkpatch.pl --no-tree --file <file>
 ```
 
-## v6 - CUT 2026-09-29, not sent
+## v6 - RE-CUT 2026-10-03 on next-20261002, READY, pending explicit go-ahead
+
+The 2026-09-29 cut (below) is superseded: PRs #17 and #18 are merged,
+and the front panel, SELECT and mmap work landed on `main`.  Same
+8-patch split, rebuilt on next-20261002 in `~/DATA/05_Code/linux-next-src`
+branch `v6b` (the earlier cut stays in `v6-split`); patches in
+`patches/v6-*.patch`, scratch trees and scripts in `.recut/v7w/`.
+
+Method, as before, top-down: the final state is a 3-way merge of `main`,
+the previous cut's base (9e2cc72) and its layout (8 conflicts, all
+resolved by hand), and each earlier state is the next one minus what
+the matching patch adds (`derive.sh`, with the previous states as the
+merge base).  Folded in: period-driven URBs and the rate rules (#17),
+runtime->delay (#18), mmap access (issue #11, JACK), the notification of
+the controls the panel changes, and one "Front Panel Selection" control
+per IN pair that alsactl keeps (the unit keeps one SELECT selection per
+pair across IN switches and power cycles, and nothing can read it).
+
+Placement decisions: the mmap flags, the URB sizing and the delay are in
+patch 1; the kctl pointers used only for the panel's notifications
+(`xpoint_kctl`, `gain_kctl`, `phantom_kctl`) and `panel_sel` in the saved
+state arrive with patch 6, not with the patches that create those
+controls, so no earlier patch carries a field nothing reads.  The design
+doc was brought up to date and documents the new behaviour.
+
+Checked: the final tree equals `main` definition by definition apart from
+the split's own differences; no state mentions the series or a function
+it does not have; per state W=1 build and checkpatch; per commit W=1
+in-tree against next-20261002 with no warnings; on the generated files
+checkpatch --strict 0 errors, 4 warnings and 1 check (all known false
+positives), nothing non-ASCII but the author name.
+
+Hardware (Pro FS, 7.2.8): each state loaded and streamed alone (RW
+48 kHz, mmap 192 kHz, kernel log clean; 0, 96, 119, 133, 133, 143, 203
+controls); regress.sh --mixer-restore --disconnect-test 59/59 on a quiet
+machine, and the mmap sweep 56/56.  A first RW run made while checkpatch
+was running had one playback xrun at 88.2 kHz / period 64; 12/12 repeats
+in both modes.  The real jackd 1.9.22 (extracted without installing,
+`.recut/jacktest.sh`) fails on the old module with the mmap message and
+works on the new one.
+
+Not verified: the analog-loopback check of the 96/192 kHz capture delay
+estimates (needs a PH3/4 to IN3 cable and `looplat -d 2 --delay`).
+
+Still to do before sending: re-read the cover letter, then the
+`git send-email` command in `docs/send-email.md` (same recipients as v5,
+leave "Mark Brown" out of the Cc list).
+
+## v6 - CUT 2026-09-29 (superseded by the re-cut above), not sent
 
 No reply to v5 after 11 days; v6 folds in the 23 driver commits made on
 `main` since the v5 cut (6b3a7f2), 11 of them David Fredman's.  Base:

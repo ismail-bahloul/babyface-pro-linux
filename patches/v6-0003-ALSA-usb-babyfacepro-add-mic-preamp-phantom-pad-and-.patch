@@ -1,6 +1,6 @@
-From 7b028e93b54bc2f9dbed67831c91f643023d4c82 Mon Sep 17 00:00:00 2001
+From 4b17345c58f54997be1a244938745f3a265be59e Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Tue, 29 Sep 2026 07:45:23 +0000
+Date: Sat, 3 Oct 2026 20:16:07 +0200
 Subject: [RFC PATCH v6 3/8] ALSA: usb: babyfacepro: add mic preamp,
  phantom/pad and input trim
 MIME-Version: 1.0
@@ -780,7 +780,7 @@ index 6ef29aa27..988766c59 100644
 +}
 +
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index bf0e9d988..fc76b7293 100644
+index 82ec98346..1d7aa832b 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
 @@ -274,7 +274,21 @@ static DEFINE_MUTEX(bf_saved_mutex);
@@ -918,7 +918,7 @@ index bf0e9d988..fc76b7293 100644
  	mutex_unlock(&chip->mutex);
  	return ret ? ret : 1;
  }
-@@ -1187,6 +1277,7 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1430,6 +1520,7 @@ static int babyface_probe(struct usb_interface *intf,
  	struct snd_card *card;
  	struct snd_pcm *pcm;
  	unsigned int urbsize;
@@ -926,7 +926,7 @@ index bf0e9d988..fc76b7293 100644
  	int i, err;
  
  	if (intf->cur_altsetting->desc.bInterfaceNumber != BF_IFACE) {
-@@ -1221,6 +1312,7 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1469,6 +1560,7 @@ static int babyface_probe(struct usb_interface *intf,
  	chip->rate = 48000;
  	chip->alt = BF_ALT_1;
  	chip->frame_bytes = 56;
@@ -934,7 +934,7 @@ index bf0e9d988..fc76b7293 100644
  	mutex_init(&chip->mutex);
  	spin_lock_init(&chip->lock);
  	atomic_set(&chip->urb_err, 0);
-@@ -1276,6 +1368,15 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1524,6 +1616,15 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -950,7 +950,7 @@ index bf0e9d988..fc76b7293 100644
  	/* Restore the mixer state saved at the last disconnect (if any);
  	 * the device keeps its registers across a usbfs detach, but the
  	 * cold init above cleared them, so push the user's settings back.
-@@ -1352,6 +1453,18 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1600,6 +1701,18 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -970,10 +970,10 @@ index bf0e9d988..fc76b7293 100644
  	if (err < 0) {
  		dev_err(&intf->dev, "snd_card_register failed: %d\n", err);
 diff --git a/sound/usb/babyfacepro/babyfacepro.h b/sound/usb/babyfacepro/babyfacepro.h
-index 84d5b7a03..f81419fc5 100644
+index 9694cb9a7..80848da06 100644
 --- a/sound/usb/babyfacepro/babyfacepro.h
 +++ b/sound/usb/babyfacepro/babyfacepro.h
-@@ -109,6 +109,45 @@
+@@ -119,6 +119,45 @@
   */
  #define BF_SETTINGS_CLOCK_INTERNAL	0x0001
  
@@ -1019,7 +1019,7 @@ index 84d5b7a03..f81419fc5 100644
  /* Register addresses (masters + crosspoint matrix). */
  #define BF_REG_MASTER_16		0x03e0	/* + 2*out (bReq 0x12) */
  #define BF_REG_MASTER_8			0x0004	/* + 2*out (bReq 0x1a) */
-@@ -226,6 +265,37 @@ struct snd_usb_babyface {
+@@ -246,6 +285,37 @@ struct snd_usb_babyface {
  	u16 master[6][2];		/* cached 16-bit masters */
  	bool muted[6];
  	u16 xpoint[6][14][2];		/* cached crosspoints (out, src, L/R) */
@@ -1057,7 +1057,7 @@ index 84d5b7a03..f81419fc5 100644
  };
  
  /* The mixer state cached across interface re-probes (see
-@@ -234,10 +304,16 @@ struct snd_usb_babyface {
+@@ -254,10 +324,16 @@ struct snd_usb_babyface {
  struct bf_saved {
  	struct list_head list;
  	char key[32];
@@ -1074,7 +1074,7 @@ index 84d5b7a03..f81419fc5 100644
  };
  
  struct bf_rate {
-@@ -269,6 +345,7 @@ void bf_state_save(struct snd_usb_babyface *chip);
+@@ -289,6 +365,7 @@ void bf_state_save(struct snd_usb_babyface *chip);
  int bf_state_restore(struct snd_usb_babyface *chip);
  void bf_state_purge(void);
  int babyface_restore_state(struct snd_usb_babyface *chip);
@@ -1082,7 +1082,7 @@ index 84d5b7a03..f81419fc5 100644
  
  /* -- babyfacepro-ctl.c ----------------------- */
  extern const u16 bf_flag_cycle[4];
-@@ -281,6 +358,15 @@ int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
+@@ -301,6 +378,15 @@ int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
  		    u16 l, u16 r);
  int babyface_create_masters(struct snd_usb_babyface *chip);
  int babyface_create_xpoints(struct snd_usb_babyface *chip);
@@ -1099,5 +1099,5 @@ index 84d5b7a03..f81419fc5 100644
  /* Master gain-law helpers (babyfacepro-ctl.c). */
  int bf_master_half_db(u16 vol16);	/* 16-bit master -> dBx2 */
 -- 
-2.55.0
+2.56.0
 
