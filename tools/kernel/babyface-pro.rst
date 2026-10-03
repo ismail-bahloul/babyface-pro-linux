@@ -107,11 +107,26 @@ start writes no mixer state.  A session triggered within about 15 ms of
 the previous one stopping comes up with the outputs silent, so a
 session start waits until 50 ms have passed since the last stop.
 
-Both directions share one clock, so while a substream is set up the
-rate belongs to it: ``open()`` offers a second client that rate alone,
-and the sound server resamples, rather than the device changing rate
-under a running stream - as with RME's own drivers, which grey the
-sample rate out while a stream runs.
+Both directions share one clock, so while another application has the
+other direction set up, the rate belongs to it: ``open()`` offers that
+rate alone, and the sound server resamples, rather than the device
+changing rate under a running stream - as with RME's own drivers, which
+grey the sample rate out while a stream runs.  The application that
+holds both directions may change the rate or the buffer size itself, as
+a DAW does from its settings; the direction it left running then stops
+with an xrun and is set up again.
+
+The size of the URBs follows the period the application asks for, so
+the latency follows the application's buffer instead of a fixed queue:
+``hw_params`` splits the period into the fewest URBs of at most
+``frames_per_urb`` frames, each a whole number of the device's IN
+packets, and keeps two periods' worth in flight (at most ``nurbs``).
+The URB handlers copy to and from the ring the core allocates and take
+the application's position from the shared control page, so the ring can
+also be mapped by the application, which JACK requires.
+``runtime->delay`` reports the audio queued in the URBs plus the fixed
+delay of the converters and of the device, per speed, so that an
+application that uses ALSA directly can line up what it records.
 
 URB completions run in interrupt context; the work that needs to sleep
 (stopping the session after repeated URB errors) runs from
