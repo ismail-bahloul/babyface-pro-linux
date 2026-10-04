@@ -30,8 +30,6 @@
 /* The transaction-flag counter cycle on 16-bit writes. */
 const u16 bf_flag_cycle[4] = { 0xc000, 0x4000, 0x8000, 0x0000 };
 
-/* -- sample-rate / alt classes -------------------- */
-
 /* rate = family_base << (alt - 1): three rate families (32k / 44.1k /
  * 48k), three interface speeds.  Measured on hardware, all nine rates,
  * through the family register alone (2026-09-16).
@@ -88,8 +86,6 @@ unsigned int bf_rate_family(const struct bf_rate *r)
 		return 2;
 	}
 }
-
-/* -- vendor requests ----------------------- */
 
 /* Timeout for every vendor control transfer (ms). */
 #define BF_CTL_TIMEOUT		1000
@@ -312,7 +308,7 @@ int bf_crosspoint_clear_cross(struct snd_usb_babyface *chip,
 	return 0;
 }
 
-/* -- mixer-state persistence across interface re-probes --------
+/* Mixer-state persistence across interface re-probes.
  * A userspace client can claim the proprietary interface via usbfs
  * (USBDEVFS_DISCONNECT_CLAIM - seen with PipeWire grabbing the
  * device when a stream targets the sink, and with the TuxMix
@@ -655,8 +651,6 @@ void bf_state_purge(void)
 	}
 	mutex_unlock(&bf_saved_mutex);
 }
-
-/* -- stream (interrupt URBs, caiaq-style) ---------------- */
 
 static bool babyface_capture_copy(struct snd_usb_babyface *chip,
 				  struct snd_pcm_substream *subs,
@@ -1138,8 +1132,6 @@ void babyface_stream_work(struct work_struct *work)
 	}
 	mutex_unlock(&chip->mutex);
 }
-
-/* -- PCM --------------------------- */
 
 static const struct snd_pcm_hardware babyface_pcm_hw = {
 	/* The URB handlers copy to and from the vmalloc'ed ring the core
@@ -1653,8 +1645,6 @@ module_param(nurbs, int, 0444);
 MODULE_PARM_DESC(nurbs, "Most URBs in flight per direction, 2..16 (8 = default).");
 module_param(panel_poll_ms, int, 0444);
 MODULE_PARM_DESC(panel_poll_ms, "Front-panel poll interval in ms, 10..1000 (20 = default, matches Windows' ~50 Hz).");
-
-/* -- USB driver ------------------------- */
 
 static void babyface_private_free(struct snd_card *card)
 {

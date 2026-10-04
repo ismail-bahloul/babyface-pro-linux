@@ -287,8 +287,6 @@ int bf_apply_masters(struct snd_usb_babyface *chip)
 	return 0;
 }
 
-/* -- mixer controls ------------------------ */
-
 /* dB TLV for the output masters: 0x2000 = 0 dB, 0x4000 = +6 dB
  * (CALIBRATION.md) with the hardware 20*log10(v/0x2000) law - the raw
  * 16-bit value IS the linear amplitude.  WirePlumber needs this to map
@@ -490,8 +488,6 @@ int bf_preamp_state_write(struct snd_usb_babyface *chip)
 			       chip->ref_level == BF_REF_LEVEL_BOOST ?
 			       0x0003 : 0x0000, 0x0000);
 }
-
-/* -- crosspoint matrix (6 outputs x 14 sources) -------------- */
 
 /* The crosspoint fader is linear in amplitude: BF_FADER_0DB (0x16a0) is
  * unity and BF_FADER_TOP (0x2d41) is exactly twice that, i.e. +6 dB - see
@@ -1010,8 +1006,6 @@ int babyface_create_xpoints(struct snd_usb_babyface *chip)
 	}
 	return 0;
 }
-
-/* -- flags / special controls (pitch, loopback, link, width, FX) -- */
 
 static int bf_switch_info(struct snd_kcontrol *kctl,
 			  struct snd_ctl_elem_info *uinfo)
@@ -2069,7 +2063,7 @@ static int bf_panel_out_decode(u8 v)
 	}
 }
 
-/* -- MIX-mode monitoring level (fader curve) ----------------
+/* MIX-mode monitoring level (fader curve).
  * Calibrated crosspoint-fader curve (AN1->AN1/2, cap_calib.pcap
  * 2026-08-22; the same table as tuxmix-core/src/usb.rs FADER_CURVE).
  * dB stored x2 (half-dB grid): the MIX wheel steps +/-0.5 dB per click
@@ -3017,8 +3011,6 @@ void babyface_panel_stop(struct snd_usb_babyface *chip)
 	cancel_delayed_work_sync(&chip->panel_work);
 }
 
-/* -- controls -------------------------- */
-
 /* The button/wheel controls hold the LATEST state and are NOT consumed
  * on read: wireplumber subscribes to every notifying control and reads
  * it, so a clear-on-get would let another reader eat the event.  Each
@@ -3291,8 +3283,6 @@ static const s64 bf_atan_tab[28] = {
 	0x8, 0x4, 0x2, 0x1,
 };
 
-/* ---- fixed-point helpers (Q27 in/out, s64 intermediates) ---- */
-
 /* sin/cos of an angle in [0, pi/2] (Q27).  Simultaneous CORDIC, 28
  * iterations (~1e-8 residual).  eq_selftest.c verifies the whole
  * pipeline against the double-precision reference.
@@ -3432,8 +3422,6 @@ void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 	w[4] = (s32)div64_s64(b0 * BF_EQ_Q27 + a0 / 2, a0);
 }
 
-/* ---- low cut ---- */
-
 /* Slope byte: 2^n-1 (n poles) -> 6/12/18/24 dB per oct; 0 = off. */
 static u8 bf_eq_lc_slope_byte(s32 slope_db)
 {
@@ -3473,8 +3461,6 @@ static u32 bf_eq_lc_freq_raw(s32 freq_hz, s32 slope_db)
 	word = (11508 * f * 11656 + (11656 + f) / 2) / (11656 + f);
 	return (u32)word;
 }
-
-/* ---- block build + bulk write ---- */
 
 static void bf_eq_build_block(u8 *b, int ch, u8 slope,
 			      const s32 bands[3][4], s32 shared, u32 lc)
@@ -3587,8 +3573,6 @@ void bf_eq_reupload(struct snd_usb_babyface *chip)
 	for (strip = 0; strip < 4; strip++)
 		bf_eq_update_strip(chip, strip);
 }
-
-/* ---- ALSA controls (4 strips x 19 controls) ---- */
 
 #define EQ_STRIP(pv)	((pv) >> 8)
 #define EQ_PARAM(pv)	((pv) & 0xff)
