@@ -2046,6 +2046,13 @@ static int babyface_resume(struct usb_interface *intf)
 	 * init and re-apply the cached mixer state.  Suspended PCM
 	 * substreams are woken by the core - apps get -ESTRPIPE and
 	 * restart (prepare starts a new session).
+	 *
+	 * This is also the reset_resume handler.  Some hosts reset the
+	 * device on resume; that needs nothing more than the cold init
+	 * already does here, and without the handler the USB core unbinds
+	 * and re-probes the driver instead: the card goes away, open PCMs
+	 * fail, and udev's alsactl restore then loads the mixer state
+	 * stored at the last shutdown over the current one.
 	 */
 	mutex_lock(&chip->mutex);
 	err = usb_set_interface(chip->dev, BF_IFACE, chip->alt);
@@ -2084,6 +2091,7 @@ static struct usb_driver babyface_driver = {
 	.disconnect = babyface_disconnect,
 	.suspend = babyface_suspend,
 	.resume = babyface_resume,
+	.reset_resume = babyface_resume,
 	.id_table = babyface_ids,
 };
 
