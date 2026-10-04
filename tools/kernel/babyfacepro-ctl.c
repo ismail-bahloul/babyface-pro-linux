@@ -2750,7 +2750,7 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 		if (in)
 			WRITE_ONCE(chip->panel_in, in);
 		/* The IN pair is only known from here on: pick up its
-		 * selection (kept across a re-probe).
+		 * selection (kept across a suspend, or set by alsactl).
 		 */
 		bf_panel_sel_load(chip);
 		out = bf_panel_out_decode(st[1] & 0x07);
@@ -2997,8 +2997,8 @@ void babyface_panel_start(struct snd_usb_babyface *chip)
 	 * dark until the next SELECT press, which shows it again instead of
 	 * stepping (hardware-verified 2026-09-29: after an unplug, the
 	 * first press lit both channels).  What panel_sel[] holds comes
-	 * from before (a re-probe keeps it, see bf_saved) or is not known,
-	 * and an unknown selection targets nothing: SET, the IN wheel and
+	 * from before a suspend, from alsactl, or is not known, and an
+	 * unknown selection targets nothing: SET, the IN wheel and
 	 * the MIX wheel then do nothing rather than act on the wrong
 	 * channel, until "Front Panel Select" is set to what the LEDs show.
 	 */
@@ -3128,19 +3128,14 @@ static int bf_panel_select_put(struct snd_kcontrol *kctl,
 	unsigned int v = ucontrol->value.enumerated.item[0];
 	int pair = kctl->private_value;
 	/* alsactl restores the values stored at the last shutdown shortly
-	 * after every probe.
+	 * after every probe.  Nothing is known before, so the stored values
+	 * are what there is.
 	 */
 	bool restore = time_is_after_jiffies(chip->panel_start + 3 * HZ);
 	s8 sel = v < 4 ? v : -1;
 
 	if (v > 4)
 		return -EINVAL;
-	/* After a boot nothing is known and the stored values are what there
-	 * is; after a re-probe the driver kept what it tracked, which is
-	 * newer than anything stored.
-	 */
-	if (restore && chip->panel_sel[pair] >= 0)
-		return 0;
 	if (pair == READ_ONCE(chip->panel_in) - 1 && !restore && sel >= 0)
 		/* Set while the LEDs show the selection: the next press steps
 		 * it.
