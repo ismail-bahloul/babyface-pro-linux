@@ -504,7 +504,19 @@ sh tools/kernel/regress.sh --dur 1 --mixer-restore --disconnect-test
 /lib/modules/$(uname -r)/build/scripts/checkpatch.pl --no-tree --file <file>
 ```
 
-## v6 - RE-CUT 2026-10-03 on next-20261002, READY, pending explicit go-ahead
+## v6 - SENT 2026-10-03 (re-cut on next-20261002)
+
+Sent 2026-10-03 21:31 (cover Message-ID 20261003193125.82085-1, archived at
+https://ratatoskr.run/linux-sound/2026/10/17688692).  Checked 2026-10-06: no
+reply yet.  Open follow-ups for a v7, once Takashi has reacted:
+
+- David's PR #19 (drop ASCII separators), PR #20 (leave re-probe state to
+  alsactl, reset_resume), issue #21 (playback clamp breaks dmix), issue #22
+  (output masters counted in the 8-bit register's 0.5 dB steps, no log table).
+  They answer v1/v2 remarks that were never answered on the list.
+- #20 removes the `panel_sel` copy across re-probes: check that a stale
+  alsactl value for SELECT cannot make SET toggle the wrong 48V.
+
 
 The 2026-09-29 cut (below) is superseded: PRs #17 and #18 are merged,
 and the front panel, SELECT and mmap work landed on `main`.  Same
