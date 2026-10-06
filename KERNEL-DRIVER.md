@@ -62,7 +62,7 @@ libasound_module_pcm_tuxmix.so  ← PipeWire via spa-alsa (sink/source)
 | Default mixer state at probe (playback → all outputs at unity; hardware inputs not routed; analog masters -20 dB, digital 0 dB) | ✅ (inputs-off default 2026-09-28, see "Power-on defaults") |
 | DSP EQ (eq.c): 4 strips × 3-band bell/shelf + low cut, 64-byte bulk coeff blocks on ep 0x0A | ✅ HARDWARE-VALIDATED 2026-08-27 on the mic (bell ±6 dB @ 200 Hz, +6 dB @ 3 kHz, low cut 100/300 Hz on/off; `eq_selftest` ~1 LSB vs the captures). Fixed-point Q27 (CORDIC + exp2, no FPU). NOTE: the loopback taps the record bus POST-EQ, so the input EQ is not measurable on the loopback chain (ear-validated instead) |
 | Preamp state sync from 0x17 readback at probe | ✅ |
-| Mixer-state persistence across interface re-probes (usbfs claim → detach → re-probe restores 48V/gains/crosspoints/pitch/flags) | ✅ 2026-08-24 |
+| Mixer-state persistence across interface re-probes (usbfs claim → detach → re-probe restores 48V/gains/crosspoints/pitch/flags) | Removed 2026-10: udev's `alsactl restore` overwrote it on every card add (see "Re-probe resilience"); a reset-resume no longer re-probes |
 | PM: suspend/resume with full cached-state restore (cold init + mixer re-apply) | ✅ |
 | checkpatch | ✅ 0 errors / 0 warnings |
 | Packaging: DKMS (survives kernel upgrades, no manual rebuild) | ✅ 2026-09-07 — `tools/kernel/dkms.conf` + `aur/snd-usb-babyface-pro-dkms/PKGBUILD`; tries plain `make` first, falls back to `LLVM=1 CC=clang` for clang-built kernels (CachyOS). Hardware-validated: built, installed, MOK-signed, and reloaded live via `dkms build`/`install` + `modprobe` on the dev box — all recent controls (Clock Source, Ref Level, Phase, Split, Trim) confirmed present via `amixer` after the DKMS-managed reload |
@@ -669,6 +669,15 @@ replug test — the driver itself had restored 8192 at probe, rc=1);
 WirePlumber then applies its own volume policy on node activation.
 Phantom/gains/crosspoints have no
 system equivalent and persist untouched.
+
+**Removed (2026-10):** asound.state holds every control of the card,
+so the `alsactl restore` udev runs on each card add overwrote the
+restored state with the last stored one anyway, phantom, gains and
+crosspoints included.  The TuxMix plugin that caused the usbfs claims
+refuses to claim a bound interface since `80c5fff`.  A re-probe now
+starts from the default mixer and alsactl, as for any card, and a
+resume that resets the device goes through `reset_resume` instead of a
+re-probe.
 
 Test the full cycle:
 ```sh

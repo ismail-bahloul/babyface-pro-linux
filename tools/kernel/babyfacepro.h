@@ -310,10 +310,7 @@ extern const u8 bf_xpoint_block[6];
 #define BF_GAIN_COARSE_MAX		20
 #define BF_GAIN_FINE_SHIFT		5
 
-/* One analog-input strip of the DSP EQ (babyfacepro-ctl.c).  A named type
- * rather than one nested in the chip, so it can also be saved with the rest
- * of the mixer state (struct bf_saved).
- */
+/* One analog-input strip of the DSP EQ (babyfacepro-ctl.c). */
 struct bf_eq_channel {
 	bool on;		/* EQ engaged (else identity blocks) */
 	s32 slope_db;		/* low-cut slope 6/12/18/24 (0 = off) */
@@ -495,32 +492,6 @@ struct snd_usb_babyface {
 	struct snd_kcontrol *dim_kctl;      /* for snd_ctl_notify */
 };
 
-struct bf_saved {
-	struct list_head list;
-	char key[32];
-	u16 preamp;
-	u8 gain[4];
-	u8 flag_cnt;
-	u16 master[6][2];
-	bool muted[6];
-	u16 xpoint[6][14][2];
-	bool phase[4];
-	int trim[4];
-	int pitch;
-	bool loopback[6];
-	bool split[6];
-	bool an12;
-	bool linked;
-	bool ms_proc;
-	bool clock_optical;
-	int ref_level;
-	int width;
-	u16 fx_send;
-	bool dim;
-	struct bf_eq_channel eq[4];
-	s8 panel_sel[3];
-};
-
 struct bf_rate {
 	unsigned int rate;
 	unsigned int alt;
@@ -591,8 +562,5 @@ void babyface_panel_stop(struct snd_usb_babyface *chip);
 void babyface_panel_work(struct work_struct *work);
 
 /* -- babyfacepro.c ------------------------ */
-void bf_state_save(struct snd_usb_babyface *chip);
-int bf_state_restore(struct snd_usb_babyface *chip);
-void bf_state_purge(void);
 int babyface_restore_state(struct snd_usb_babyface *chip);
 int bf_state_apply_flags(struct snd_usb_babyface *chip);

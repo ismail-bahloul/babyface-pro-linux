@@ -7,8 +7,8 @@ RME Babyface Pro / Pro FS (snd-usb-babyface-pro)
 This document describes the design of the ``snd-usb-babyface-pro``
 driver - what problem the driver solves, why it is a standalone
 driver instead of a snd-usb-audio quirk, and the four design
-decisions (protocol shape, stream model, mixer-state persistence,
-front-panel emulation) that shape most of the code.
+decisions (protocol shape, stream model, the mixer state across
+suspend, front-panel emulation) that shape most of the code.
 
 Two USB personalities, one device
 ==================================
@@ -77,11 +77,11 @@ holds.  Two consequences follow directly from this:
   state directly; none of them ever talks to the device.
 
 * A full reset of the device's registers - which the cold init at
-  probe and at resume does - has to be followed by replaying the
-  *entire* cached state back, in the right order, or the card comes
-  back silent or at the wrong levels.  This is what
-  ``babyface_restore_state()`` and ``bf_state_apply_flags()`` do (see
-  "Mixer-state persistence" below).
+  resume does - has to be followed by replaying the *entire* cached
+  state back, in the right order, or the card comes back silent or at
+  the wrong levels.  This is what ``babyface_restore_state()`` and
+  ``bf_state_apply_flags()`` do (see "Mixer state across suspend"
+  below).
 
 The stream model
 ================
@@ -132,22 +132,21 @@ URB completions run in interrupt context; the work that needs to sleep
 (stopping the session after repeated URB errors) runs from
 ``stream_work``.
 
-Mixer-state persistence across re-probes
-==========================================
+Mixer state across suspend
+==========================
 
-A userspace client can claim the proprietary interface directly via
-``usbfs`` (``USBDEVFS_DISCONNECT_CLAIM``) - both PipeWire grabbing the
-device for a sink and the project's own TuxMix userspace daemon do
-this via libusb.  That detaches the kernel driver and the ALSA card
-disappears for the duration; when the client releases the interface,
-the driver re-probes.  The device keeps its register contents across
-this detach, but the cold init the probe runs clears them - so the
-driver saves the in-memory mixer state at ``disconnect()`` and
-restores it at the next ``probe()``, keyed by the device's USB serial
-number (or its sysfs path, if it has no serial) so the same physical
-unit gets its state back across the cycle.  The same state is also
-what a system-suspend resume replays, since the device loses its
-registers across a suspend the same way.
+The device loses its registers across a system suspend.  ``resume()``
+re-runs the cold init and writes the whole cached state back, as
+TotalMix does, and re-uploads the EQ coefficients.  Some hosts reset
+the device on resume; the same handler serves as ``reset_resume()``,
+so the card stays registered and open streams get ``-ESTRPIPE`` as on
+any resume, instead of the driver being unbound and probed again.
+
+A probe - the first one, a replug, a module reload, or a userspace
+program releasing the interface after claiming it through ``usbfs`` -
+starts from the cold init and the default mixer described above.  The
+user's settings then come back as for any other card: udev runs
+``alsactl restore`` when the card is registered.
 
 Front-panel emulation: the driver plays TotalMix's role
 ==========================================================
@@ -183,11 +182,10 @@ is Ch 1/2), so that alsactl keeps it across boots like any other
 mixer setting.  It cannot know what the unit holds before it has been
 told once, so a pair starts out unknown, and SET and the wheel then do
 nothing instead of acting on a channel that may not be the lit one;
-setting the control to what the LEDs show for the pair tells it.  A
-re-probe, which does not change the unit, keeps what the driver had,
-and the older values alsactl restores shortly after probe are ignored
-for a pair the driver already knows.  The stored values can be wrong
-only if the selection was changed while the driver was not running
-(the unit used on its own, or with another host).  The relevant code
+setting the control to what the LEDs show for the pair tells it.
+After a probe the driver starts from the values alsactl restores.
+They are wrong if the selection was changed after alsactl last stored
+them: while the driver was not running (the unit used on its own, or
+with another host), or since the last store.  The relevant code
 comments (``babyface_panel_start()``, the ``panel_select_armed``
 handling in ``bf_panel_tick()``) explain the details.
