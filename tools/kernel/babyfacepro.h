@@ -535,7 +535,7 @@ const struct bf_rate *bf_rate_lookup(unsigned int rate);
  */
 unsigned int bf_rate_family(const struct bf_rate *r);
 
-/* -- shared driver state ---------------------- */
+/* Shared tables */
 extern const u16 bf_flag_cycle[4];
 extern const struct bf_source bf_sources[14];
 
@@ -548,7 +548,7 @@ int babyface_create_eq(struct snd_usb_babyface *chip);
 extern const u8 bf_xpoint_block[6];
 extern const struct snd_pcm_hw_constraint_list bf_rates_constraint;
 
-/* -- babyfacepro.c ------------------------ */
+/* babyfacepro.c */
 int bf_vendor_write(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx);
 int bf_settings_write(struct snd_usb_babyface *chip);
 int bf_clock_write(struct snd_usb_babyface *chip);
@@ -563,7 +563,7 @@ void babyface_stream_kill(struct snd_usb_babyface *chip);
 void babyface_pcm_stop_both(struct snd_usb_babyface *chip, snd_pcm_state_t state);
 void babyface_stream_work(struct work_struct *work);
 
-/* -- babyfacepro-ctl.c ----------------------- */
+/* babyfacepro-ctl.c */
 int babyface_write_default_mixer(struct snd_usb_babyface *chip);
 int bf_apply_masters(struct snd_usb_babyface *chip);
 int bf_loopback_write_map(struct snd_usb_babyface *chip, int out, bool on);
@@ -584,13 +584,13 @@ u8 bf_master_8bit(u16 vol16);		/* 16-bit master -> 8-bit companion */
 int bf_gain_max_db(int mic);
 int bf_gain_db(int mic, u8 raw);	u8 bf_gain_raw(int mic, int db);
 
-/* -- babyfacepro-ctl.c ----------------------- */
+/* babyfacepro-ctl.c */
 int babyface_create_panel(struct snd_usb_babyface *chip);
 void babyface_panel_start(struct snd_usb_babyface *chip);
 void babyface_panel_stop(struct snd_usb_babyface *chip);
 void babyface_panel_work(struct work_struct *work);
 
-/* -- babyfacepro.c ------------------------ */
+/* babyfacepro.c */
 void bf_state_save(struct snd_usb_babyface *chip);
 int bf_state_restore(struct snd_usb_babyface *chip);
 void bf_state_purge(void);
