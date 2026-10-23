@@ -348,7 +348,10 @@ first-impulse method.)  Full sweep `tools/kernel/latency-sweep.sh`:
    --mixer-restore (48V+gain survive unbind/rebind).  It caught two
    real driver bugs, both fixed: (a) playback overrunning the app ring
    at small buffers (hw_ptr past appl_ptr → spurious XRUN) — the copy
-   is now clamped to the written frames; (b) capture dying silently at
+   was clamped to the written frames (dropped again once the URBs were
+   sized from the period: the clamp kept the pointer still for dmix,
+   which runs the stream free, so dmix played silence); (b)
+   capture dying silently at
    176.4/192 kHz with frames_per_urb < 32 (alt-3 packets are 1024 B →
    -EOVERFLOW babble) — min_fpu per alt (8/16/32) is enforced in
    hw_params.  38/38 PASS at the 256×8 and 16×16 profiles.

@@ -650,31 +650,20 @@ static bool babyface_playback_copy(struct snd_usb_babyface *chip,
 	unsigned int words = chip->frame_bytes / 4;
 	unsigned int chans = rt->channels;
 	unsigned int pos, f, i;
-	unsigned int total = frames;	/* the URB buffer's full frame count */
 	unsigned long new_period;
 	bool crossed = false;
 	const u8 *src;
 
 	spin_lock(&chip->lock);
-	/* Never copy frames the app has not prepared.  With several URBs in
-	 * flight the device can transiently be ahead of the app ring at low
-	 * periods, so hw_ptr may reach past appl_ptr; reading beyond appl_ptr
-	 * would trip a spurious XRUN.  The device just repeats the last
-	 * frames instead.  (Both counters are unbounded, so clamp on the
-	 * signed difference.)
+	/* Copy the ring as it is and move the pointer on by the whole URB,
+	 * as a DMA engine reading the buffer would: the device plays every
+	 * frame of the URB.  Whether the application has written them is
+	 * the PCM core's business.  It stops the stream on an underrun when
+	 * the pointer passes appl_ptr, and an application that lets the
+	 * stream run free (a stop threshold at the boundary, as dmix sets
+	 * on the hardware PCM it opens) relies on the pointer moving with
+	 * the device.
 	 */
-	{
-		snd_pcm_sframes_t avail =
-			(snd_pcm_sframes_t)(rt->control->appl_ptr -
-					    chip->hw_ptr[SNDRV_PCM_STREAM_PLAYBACK]);
-
-		if (avail < 0)
-			avail = 0;
-		else if (avail > (snd_pcm_sframes_t)buf_frames)
-			avail = buf_frames;
-		if ((snd_pcm_uframes_t)avail < frames)
-			frames = (unsigned int)avail;
-	}
 	pos = chip->hw_ptr[SNDRV_PCM_STREAM_PLAYBACK] % buf_frames;
 	for (f = 0; f < frames; f++) {
 		__le32 *w = (__le32 *)(data + f * chip->frame_bytes);
@@ -698,12 +687,6 @@ static bool babyface_playback_copy(struct snd_usb_babyface *chip,
 		if (pos >= buf_frames)
 			pos = 0;
 	}
-	/* A clamped copy wrote only [0, frames); clear the tail, or the device
-	 * plays whatever the previous completion left in the URB buffer.
-	 */
-	if (frames < total)
-		memset(data + frames * chip->frame_bytes, 0,
-		       (total - frames) * chip->frame_bytes);
 	chip->hw_ptr[SNDRV_PCM_STREAM_PLAYBACK] += frames;
 	new_period = chip->hw_ptr[SNDRV_PCM_STREAM_PLAYBACK] / rt->period_size;
 	if (new_period != chip->prev_period[SNDRV_PCM_STREAM_PLAYBACK]) {
