@@ -4,6 +4,10 @@ How to mail a kernel patch series from this repo with `git send-email`
 (via Gmail SMTP). Written down so a future submission (v2, etc.) is a
 paste, not a re-investigation.
 
+> Status 2026-10-23: v7 is cut and validated but not sent.  The plan is
+> a direct submission, not another email round.  This recipe stays for
+> the case where a mailing-list submission is needed after all.
+
 ## Prerequisites (CachyOS/Arch)
 
 ```sh

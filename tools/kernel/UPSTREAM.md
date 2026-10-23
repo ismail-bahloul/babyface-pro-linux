@@ -539,8 +539,12 @@ Hardware (Pro FS, 7.2.11, the new module loaded): `regress.sh
 --mixer-restore --disconnect-test` 41/41, the mmap sweep 38/38, the
 AS1/2 loopback read on ch4/5 at about -30 dBFS, `pcmlate` PASS at
 periods 256/1024/2048 @48 kHz, and a one-second tone through `dmix`
-plays and returns.  v7 is ready to post, or to go in as a direct
-submission.
+plays and returns.
+
+Decision 2026-10-23: do not send a v7 email.  v6 drew no reply and the
+lists are busy; keep the series ready and go in as a direct submission
+when the time comes.  Before submitting, rebase onto the then-current
+linux-next and regenerate the patches; the rest is done.
 
 ## v6 - SENT 2026-10-03 (re-cut on next-20261002)
 
