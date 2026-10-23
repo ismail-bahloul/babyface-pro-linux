@@ -504,6 +504,44 @@ sh tools/kernel/regress.sh --dur 1 --mixer-restore --disconnect-test
 /lib/modules/$(uname -r)/build/scripts/checkpatch.pl --no-tree --file <file>
 ```
 
+## v7 - CUT 2026-10-23, not sent
+
+Folds in the fixes made since v6 on the same 8-patch split and the same
+base (next-20261002).  Integration branch `v7b` in
+`~/DATA/05_Code/linux-next-src`; patches in `patches/v7-*.patch`;
+scratch trees and the recut scripts in `.recut/v7c/`.
+
+What changed since v6:
+
+- Patch 1: the playback handler copies the ring as it is and moves
+  hw_ptr on by the whole URB, so an application that runs the stream
+  free (dmix on the hardware PCM) is no longer kept silent by the
+  clamp (#21).  Capture is now the identity map in the device's own
+  order: AN1-4, AS1/2, ADAT3-8 (#26).
+- Patch 2: output masters count the 8-bit register's 0.5 dB steps; the
+  log table is gone (#22).
+- Patch 4: `Optical Out Format` (ADAT/SPDIF, bit 10 of the settings
+  word) (#12).
+- Patches 2, 5, 6: no saved mixer state across re-probes any more;
+  alsactl restores it, and a reset goes through reset_resume (#20).
+  The front-panel SELECT selection is still handled specially, now
+  with `bf_seen` instead of the saved-state list.
+- All patches: ASCII separator comments dropped (#19).
+
+Validated: every state builds out-of-tree and in-tree with `W=1` and
+no warnings; `git am` of `patches/v7-*.patch` on `origin/master`
+reproduces `v7b` exactly; checkpatch --strict on the generated files
+reports 0 errors, 4 warnings and 2 checks (the known 'ang' x2, BIT()
+for a signed Q27 constant, the MAINTAINERS note on the two patches
+that add files, and CamelCase on `bInterfaceNumber`).
+
+Hardware (Pro FS, 7.2.11, the new module loaded): `regress.sh
+--mixer-restore --disconnect-test` 41/41, the mmap sweep 38/38, the
+AS1/2 loopback read on ch4/5 at about -30 dBFS, `pcmlate` PASS at
+periods 256/1024/2048 @48 kHz, and a one-second tone through `dmix`
+plays and returns.  v7 is ready to post, or to go in as a direct
+submission.
+
 ## v6 - SENT 2026-10-03 (re-cut on next-20261002)
 
 Sent 2026-10-03 21:31 (cover Message-ID 20261003193125.82085-1, archived at

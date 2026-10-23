@@ -1,0 +1,135 @@
+From 254d764174923706f7b8c00cc90217424be7d270 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
+Date: Fri Oct 23 11:37:13 2026 +0200
+Subject: [RFC PATCH v7 0/8] ALSA: usb: add RME Babyface Pro driver (proprietary mode)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Hi Takashi,
+
+This is v7 of the RME Babyface Pro proprietary-mode driver.  The split
+is the one you asked for in the v4 review and that v5 introduced: a
+minimal core first, the mixer added piece by piece, suspend/resume near
+the end, the front panel and the DSP EQ last, and a design document.
+v7 keeps that split and folds in the fixes made since v6; it is rebased
+on next-20261002, the same base as v6.
+
+Changes since v6:
+
+ - Playback underruns (patch 1, David Fredman).  The playback handler
+   clamped its copy to the frames the application had written, so
+   hw_ptr could not pass appl_ptr.  An application that runs the stream
+   free - dmix, on the hardware PCM it opens - therefore got a silent
+   stream and hung.  The handler now copies the ring as it is and moves
+   the pointer on by the whole URB, as a DMA engine would; the PCM
+   core's xrun check and stop threshold handle an underrun.
+
+ - Capture order (patch 1).  The twelve capture channels now follow
+   the device's own word order: AN1-4, AS1/2, ADAT3-8.  AS1/2 is the
+   first optical pair, so it carries ADAT 1/2 in ADAT mode and S/PDIF
+   in S/PDIF mode.  The old map kept channels 0-9 in place and moved
+   AS1/2 to 10/11; the identity map is one thing less to explain, and
+   before mainline is the last window to change the order.  The tools
+   in the development repository and the companion mixer application
+   follow.
+
+ - Output masters (patch 2, David Fredman).  The controls now count
+   the 8-bit register's 0.5 dB steps over the front panel's range; the
+   control value is the hardware step, the 16-bit companion register is
+   derived from it, and the conversion table is gone.
+
+ - Optical Out (patch 4).  A new "Optical Out Format" control switches
+   the optical port between ADAT (default) and S/PDIF, bit 10 of the
+   host settings word.
+
+ - Re-probes (patches 2, 5, 6, David Fredman).  The driver no longer
+   saves its mixer state at disconnect and restores it at the next
+   probe: udev's alsactl restore overwrote it on every card add, so a
+   re-probe now starts from the default mixer and alsactl restores the
+   user's settings, as for any other card.  A resume that follows a
+   device reset goes through reset_resume instead of a re-probe.  The
+   front-panel SELECT selection is the exception - it is not readable -
+   so values restored after a boot are used, while a re-probe of a unit
+   already seen leaves the pairs unknown, because SELECT may have been
+   pressed since the last store.
+
+ - The ASCII separator comments are gone (all patches, David Fredman).
+
+Every patch builds in-tree on its own against next-20261002 with W=1
+and no warnings.  Run against the generated patch files, checkpatch
+--strict reports no errors, four warnings and two checks, all known
+false positives: 'ang' (the CORDIC angle) twice and BIT() for a signed
+Q27 constant in the EQ patch, the "does MAINTAINERS need updating?"
+note on the two patches that add files (the control-surface file in
+patch 2 and the documentation in patch 8), and the CamelCase check on
+the USB descriptor's bInterfaceNumber.
+
+Validated on the unit with the final tree (out-of-tree against
+7.2.11):
+
+ - regress.sh --mixer-restore --disconnect-test passes 41/41: the
+   full-duplex sweep of the nine rates at periods 256 to 2048 with no
+   xruns, runtime renegotiation, 30 start/stop cycles, the mixer state
+   restored across an unbind/rebind, and an unbind in the middle of a
+   capture.  The mmap sweep passes 38/38.
+
+ - The AS1/2 loopback is on capture ch4/5: the sweep's tap reads it at
+   about -30 dBFS, and pcmlate follows 12 of its 13 clicks there.
+
+ - pcmlate reports a stalled writer as a playback xrun at periods of
+   256, 1024 and 2048 frames at 48 kHz, and a one-second tone through
+   dmix plays and returns (the clamp was what hung it).
+
+Known limitations, unchanged from v6:
+
+ - USB autosuspend is not supported; it is disabled at probe.  S3
+   suspend/resume works.
+
+ - A few protocol details remain open (documented in the source, not
+   blocking): the preamp readback index semantics, a width
+   strip-ownership edge case, whether DIM's scope follows TotalMix's
+   Main Out setting, and the exact high-frequency warping of the EQ
+   coefficients against the vendor curve.
+
+ - The URB size and count are load-time parameters, though the size
+   follows the period the application asks for.
+
+Disclosure: as with previous versions, the reverse-engineering and
+substantial portions of the kernel implementation were written with
+heavy assistance from AI coding assistants.  All of it was verified by
+hand on real hardware; the human authors remain responsible for the
+result via Signed-off-by.
+
+Thanks,
+Ismaïl
+
+Ismaïl Bahloul (8):
+  ALSA: usb: add RME Babyface Pro driver core (probe, PCM stream)
+  ALSA: usb: babyfacepro: add output masters and crosspoint routing
+  ALSA: usb: babyfacepro: add mic preamp, phantom/pad and input trim
+  ALSA: usb: babyfacepro: add routing flags and varispeed pitch
+  ALSA: usb: babyfacepro: add S3 suspend/resume
+  ALSA: usb: babyfacepro: add the front-panel poll and controls
+  ALSA: usb: babyfacepro: add the hardware DSP EQ
+  Documentation: sound: add the Babyface Pro proprietary-mode design doc
+
+ Documentation/sound/cards/babyface-pro.rst |  218 ++
+ Documentation/sound/cards/index.rst        |    1 +
+ MAINTAINERS                                |    6 +
+ sound/usb/Kconfig                          |   17 +
+ sound/usb/Makefile                         |    2 +-
+ sound/usb/babyfacepro/Makefile             |    4 +
+ sound/usb/babyfacepro/babyfacepro-ctl.c    | 3951 ++++++++++++++++++++
+ sound/usb/babyfacepro/babyfacepro.c        | 1966 ++++++++++
+ sound/usb/babyfacepro/babyfacepro.h        |  558 +++
+ 9 files changed, 6722 insertions(+), 1 deletion(-)
+ create mode 100644 Documentation/sound/cards/babyface-pro.rst
+ create mode 100644 sound/usb/babyfacepro/Makefile
+ create mode 100644 sound/usb/babyfacepro/babyfacepro-ctl.c
+ create mode 100644 sound/usb/babyfacepro/babyfacepro.c
+ create mode 100644 sound/usb/babyfacepro/babyfacepro.h
+
+-- 
+2.56.0
+

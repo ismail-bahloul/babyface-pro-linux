@@ -68,7 +68,7 @@ missing or wrong. He has been asked for the name and address he wants
 
 ## Send
 
-The current series is v6 (`patches/v6-*.patch`).  Run it once with
+The current series is v7 (`patches/v7-*.patch`).  Run it once with
 `--dry-run` first: it prints every mail with its recipients and sends
 nothing.
 
@@ -87,7 +87,7 @@ git send-email \
   --cc=skhan@linuxfoundation.org \
   --cc=rdunlap@infradead.org \
   --cc=linux-doc@vger.kernel.org \
-  patches/v6-00*.patch
+  patches/v7-00*.patch
 ```
 
 The last four Cc lines are the Documentation reviewers `get_maintainer.pl`
