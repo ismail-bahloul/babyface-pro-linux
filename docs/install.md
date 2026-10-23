@@ -22,9 +22,9 @@ cd aur/snd-usb-babyface-pro-dkms && makepkg -si
 `dkms.conf` ships in `tools/kernel/`:
 
 ```sh
-sudo cp -r tools/kernel /usr/src/snd-usb-babyface-pro-0.1.1
-sudo dkms add     -m snd-usb-babyface-pro -v 0.1.1
-sudo dkms install -m snd-usb-babyface-pro -v 0.1.1
+sudo cp -r tools/kernel /usr/src/snd-usb-babyface-pro-0.2.0
+sudo dkms add     -m snd-usb-babyface-pro -v 0.2.0
+sudo dkms install -m snd-usb-babyface-pro -v 0.2.0
 sudo modprobe snd-usb-babyface-pro
 ```
 
