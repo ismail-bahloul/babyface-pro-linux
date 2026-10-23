@@ -6,9 +6,11 @@
 // report that stall as a playback xrun (-EPIPE): the device ran out of
 // audio while the application was away.
 //
-// At the alt-1 rates (<= 48 kHz) the capture stream carries the device's
-// internal playback tap on ch 10, so the clicks can be followed through
-// the device.  Each click's capture frame minus its playback frame is
+// At the alt-1 rates (<= 48 kHz) the capture stream carries the AS1/2
+// output loopback on ch 4 (device words 4/5), so the clicks can be
+// followed through the device when that loopback is on; without it the
+// slip reads n/a, which does not affect PASS.  Each click's capture frame
+// minus its playback frame is
 // constant while the two streams stay locked.  If the stall is not
 // reported, the clicks written after it are still played, only later:
 // the difference grows by the silence the device played meanwhile, and
@@ -29,7 +31,7 @@
 
 #define MAX_CLICKS	64
 #define CLICK_LEN	4
-#define TAP_CH		10		/* device word 12, the playback tap */
+#define TAP_CH		4		/* device word 4, the AS1/2 loopback */
 
 static snd_pcm_t *pb, *cap;
 static int rate, cap_ch, tap_ok;

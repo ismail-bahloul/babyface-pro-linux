@@ -3,9 +3,9 @@
 #
 # Sweeps every sample rate x period (>= the current frames_per_urb floor)
 # in full-duplex with tools/kernel/pcmxrun.c: xruns on both streams must be
-# 0, and (alt-1 rates) the AS1/2 loopback on capture ch10/11 must carry the
-# tone (signal integrity without a mic).  The 2026-10-17 capture map puts
-# AS1/2 on ch10/11; the old fixed playback tap there is gone, so the sweep
+# 0, and (alt-1 rates) the AS1/2 loopback on capture ch4/5 must carry the
+# tone (signal integrity without a mic).  The identity capture map puts
+# AS1/2 on ch4/5; the old fixed playback tap is gone, so the sweep
 # enables the AS1/2 loopback and restores its previous state afterwards.
 # period/buffer renegotiation inside one PCM session (pcmreneg.c, the
 # issue-#5 shape), a start/stop stress loop (open/arm/kill/close) and,
@@ -95,8 +95,8 @@ if ! free_device; then
 	exit 1
 fi
 
-# The old fixed playback tap on capture ch10/11 is gone: the capture map
-# puts AS1/2 there.  Enable the AS1/2 output loopback so the playback tone
+# The old fixed playback tap is gone: the identity capture map puts
+# AS1/2 on ch4/5.  Enable the AS1/2 output loopback so the playback tone
 # reaches those channels for the tap checks, and restore the previous
 # loopback state when they are done.
 LB_AS12=$(amixer -c "$CARD" controls | awk -F'[ ,]' '/Loopback Switch/ && /index=2/ {print $1}' | head -1)

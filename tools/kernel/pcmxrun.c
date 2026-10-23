@@ -7,9 +7,10 @@
 // (the real-app pattern — PipeWire/DAWs refill asynchronously); a
 // serialized read→write loop would underrun at high rates even when the
 // driver is fine.  If the capture stream can carry 12 ch and the rate is
-// an alt-1 rate (<= 88.2 kHz), the device words 12/13 (= capture ch10/11)
-// echo the playback at a fixed ~-27 dB — that RMS is a signal-integrity
-// check that needs no microphone.
+// an alt-1 rate (<= 48 kHz), the AS1/2 output loopback on capture ch4/5
+// (device words 4/5) echoes the playback — that RMS is a signal-integrity
+// check that needs no microphone.  It needs the AS1/2 loopback on;
+// regress.sh enables it for the sweep.
 //
 // With PCMX_MMAP=1 in the environment both streams are opened for mmap
 // access and filled through snd_pcm_mmap_begin()/commit(), the way JACK
@@ -170,7 +171,7 @@ static void *reader_thread(void *arg)
 		}
 		if (tap_ok) {
 			for (snd_pcm_sframes_t i = 0; i < r; i++) {
-				int32_t v = cbuf[i * cap_ch + 10];	/* word 12 */
+				int32_t v = cbuf[i * cap_ch + 4];	/* word 4 */
 				tap_sum += (double)v * (double)v;
 			}
 			tap_n += r;
@@ -194,9 +195,10 @@ int main(int argc, char **argv)
 	int dur = atoi(argv[5]);
 	pb_ch = getenv("PCMX_PBCH") ? atoi(getenv("PCMX_PBCH")) : 2;
 	use_mmap = getenv("PCMX_MMAP") && atoi(getenv("PCMX_MMAP"));
-	/* alt-1 rates have the 14-word frame (56 B): words 12/13 = the
-	 * playback tap at ch10/11.  alt 2/3 frames are 10/8 words, with no
-	 * tap channels, so only the alt-1 rates (<= 48 kHz) carry it. */
+	/* alt-1 rates have the 14-word frame (56 B): words 4/5 are
+	 * AS1/2, so with its output loopback on they carry the playback
+	 * tap at ch4/5.  The tap check stays on the alt-1 rates, where
+	 * the 12-channel frame and the loopback level were validated. */
 	tap_ok = (rate <= 48000);
 	cap_ch = tap_ok ? 12 : 2;
 	total = (long)rate * dur;

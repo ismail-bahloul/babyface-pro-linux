@@ -3,13 +3,14 @@
 // Principle: open playback + capture on the same device, LINK them so the
 // kernel triggers both on the same instant (shared device clock), pre-fill
 // the playback buffer with an impulse train starting at frame 0, and detect
-// the first rising edge in the loopback capture (device words 12/13 =
-// capture ch10/11 in the 12-ch frame).  Because both streams start at
+// the first rising edge in the loopback capture (device words 4/5 = capture
+// ch4/5 in the 12-ch frame, with the AS1/2 output loopback on).  Because
+// both streams start at
 // device frame 0 together, the first-impulse position IS the loopback
 // round-trip latency — no start-phase ambiguity.
 //
 // Usage: looplat [options] <card> <pb_ch> <period> <buffer> <dur_s>
-//        (capture is always 12 ch — the loopback lands on ch10/11)
+//        (capture is always 12 ch — the loopback lands on ch4/5)
 // Prints: latency_frames=<n> latency_ms=<x> xruns=<n>
 //
 // Options (see usage() below) set the rate, the capture channel the
@@ -42,8 +43,8 @@ static void usage(const char *prog)
 		"\n"
 		"options:\n"
 		"  -r RATE      sample rate in Hz (default 48000)\n"
-		"  -d CH        capture channel to detect on (default 10, the\n"
-		"               internal playback tap; 2 = IN3 via a cable)\n"
+		"  -d CH        capture channel to detect on (default 4, the\n"
+		"               AS1/2 loopback tap; 2 = IN3 via a cable)\n"
 		"  -c P/B       capture period/buffer (default: as playback)\n"
 		"  -f pb|cap    set up this direction first (default pb)\n"
 		"  -D, --delay  check snd_pcm_delay() instead: see below\n"
@@ -234,7 +235,7 @@ static int run_delay(snd_pcm_t *pb, snd_pcm_t *cap, int pb_ch, int cap_ch,
 int main(int argc, char **argv)
 {
 	int rate = 48000;
-	int det_ch = 10;		/* loopback = words 12/13 = ch10/11 */
+	int det_ch = 4;		/* loopback = words 4/5 = ch4/5 */
 	int cap_first = 0, split = 0, delay = 0;
 	static const struct option lopts[] = {
 		{ "delay", no_argument, NULL, 'D' },
@@ -410,7 +411,7 @@ int main(int argc, char **argv)
 			break;
 		}
 		for (int i = 0; i < r; i++) {
-			int32_t v = cbuf[i * cap_ch + det_ch];	/* 10: word 12 */
+			int32_t v = cbuf[i * cap_ch + det_ch];	/* 4: word 4 */
 			/* The tap echoes the impulse ~27 dB down (0x40000000 -> ~0x01C00000),
 			 * so the old threshold 0x400000/2 never matched and the first
 			 * crossing found was a spurious one.  Use 1/64 — the noise

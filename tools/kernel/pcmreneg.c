@@ -11,9 +11,10 @@
 // issue #5 was this renegotiation leaving the stream "started" but
 // silent (recovery needed a module reload or a replug).  Audio flow is
 // checked the same way pcmxrun does: at an alt-1 rate (<= 48 kHz) the
-// device words 12/13 (= capture ch10/11) echo the playback at ~-27 dB,
-// so a config that goes silent after a change reads tap_rms=-inf and
-// FAILs even though no xrun is reported.
+// AS1/2 output loopback on capture ch4/5 (device words 4/5) echoes the
+// playback, so a config that goes silent after a change reads
+// tap_rms=-inf and FAILs even though no xrun is reported.  regress.sh
+// enables the AS1/2 loopback for the run.
 //
 // Usage: pcmreneg <card> <rate> [period:buffer ...]
 //   default configs: 256:512 512:1024 1024:2048 2048:4096 512:1024 256:512
@@ -103,7 +104,7 @@ static void *reader_thread(void *arg)
 		}
 		if (tap_ok) {
 			for (snd_pcm_sframes_t i = 0; i < r; i++) {
-				int32_t v = cbuf[i * cap_ch + 10];	/* word 12 */
+				int32_t v = cbuf[i * cap_ch + 4];	/* word 4 */
 
 				tap_sum += (double)v * (double)v;
 			}
@@ -215,8 +216,9 @@ int main(int argc, char **argv)
 	card = atoi(argv[1]);
 	rate = atoi(argv[2]);
 	pb_ch = 2;
-	/* alt-1 rates carry the 14-word frame (words 12/13 = the playback
-	 * tap at ch10/11); alt 2/3 frames are 10/8 words and have none. */
+	/* alt-1 rates carry the 14-word frame (words 4/5 = AS1/2, the
+	 * loopback tap at ch4/5); the check stays on the alt-1 rates, as
+	 * in pcmxrun. */
 	tap_ok = (rate <= 48000);
 	cap_ch = tap_ok ? 12 : 2;
 
