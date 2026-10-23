@@ -58,7 +58,7 @@ libasound_module_pcm_tuxmix.so  ← PipeWire via spa-alsa (sink/source)
 | Controls: pitch, loopback ×6, AN1>2, link, width, FX send, MS | ✅ |
 | Loopback record staging | ✅ NO STAGING NEEDED (2026-08-26): the record is 1:1 with the master on Windows (aligned captures) AND Linux (live, S16 tone: −20 dBFS → −20.0).  The “fixed 2^-5 tap”/×32 were artifacts of mktone.py's broken 4-byte tone (chain ran −48 dB low → record quantizer → coarse square).  ×32 REVERTED; mktone.py → S16 |
 | Front-panel readback (0x17 poll at 50 Hz → read-only button/wheel/IN/OUT/MIX/DIM ALSA controls, babyfacepro-ctl.c) | ✅ hardware-validated 2026-08-26 (all six flash codes + wheel; consume-on-get bug fixed — controls hold the last state) |
-| Multi-channel PCM (2-12 ch, full 14-word frame) | ✅ (12-ch capture + playback verified; capture map revised 2026-10-17: AS1/2 on ch10/11, playback tap dropped) |
+| Multi-channel PCM (2-12 ch, full 14-word frame) | ✅ (12-ch capture + playback verified; capture is the device's own order, AS1/2 on ch4/5, since 2026-10-23) |
 | Default mixer state at probe (playback → all outputs at unity; hardware inputs not routed; analog masters -20 dB, digital 0 dB) | ✅ (inputs-off default 2026-09-28, see "Power-on defaults") |
 | DSP EQ (eq.c): 4 strips × 3-band bell/shelf + low cut, 64-byte bulk coeff blocks on ep 0x0A | ✅ HARDWARE-VALIDATED 2026-08-27 on the mic (bell ±6 dB @ 200 Hz, +6 dB @ 3 kHz, low cut 100/300 Hz on/off; `eq_selftest` ~1 LSB vs the captures). Fixed-point Q27 (CORDIC + exp2, no FPU). NOTE: the loopback taps the record bus POST-EQ, so the input EQ is not measurable on the loopback chain (ear-validated instead) |
 | Preamp state sync from 0x17 readback at probe | ✅ |
@@ -152,6 +152,21 @@ first-impulse method.)  Full sweep `tools/kernel/latency-sweep.sh`:
   ch10/11 at about -45 dBFS; with loopback off ch10/11 read -120 dBFS
   (no tap left). The same test on ADAT3/4 lit ch4/5. The earlier
   "words 4/5 are a fixed marker" note was wrong.
+
+  **REVISED 2026-10-23 (v7, issue #26): identity map.** The
+  application channels now follow the device's own order, one word per
+  channel: ch0-3 = AN1-4, ch4/5 = AS1/2, ch6-11 = ADAT3-8. AS1/2 is
+  the first optical pair, so it is ADAT 1/2 when the input receives
+  ADAT and S/PDIF when it receives S/PDIF; the rest are named ADAT3-8
+  for that reason. `babyface_capture_copy()` no longer has a map table.
+  TotalMix uses the same order, and so does this document's input list
+  ("AN1-4, AS1/2, ADAT"). The 2026-10-17 map kept ch0-9 in place and
+  appended AS1/2 at ch10/11; before mainline the order matters more
+  than that compatibility, because userspace (TuxMix, the AUR package)
+  can still move with the driver. The tools that read the loopback tap
+  now read ch4/5 (`pcmxrun`, `pcmreneg`, `looplat`, `pcmlate`,
+  `latency-test.sh`, `regress.sh`). At 96/192 kHz the frame has 10/8
+  words; the channels past them read zero.
 
 2. **Multi-channel PCM** — DONE (see the status table above:
    `channels_max = 12`, 12-ch capture + playback hardware-verified).
@@ -341,9 +356,14 @@ first-impulse method.)  Full sweep `tools/kernel/latency-sweep.sh`:
    **2026-10-18: with the AS1/2 capture map, the tap check now uses the
    AS1/2 loopback. The same command reports 41 pass / 0 fail / 0 skipped
    with the module that adds the Optical Out control.**
+   **2026-10-23 (v7, identity capture map): 41 pass / 0 fail / 0
+   skipped with the same command, 38/38 in the mmap sweep, pcmlate
+   reports the stalled writer as a playback xrun at periods 256/1024/
+   2048 @48k, a one-second tone through dmix plays and returns, and the
+   AS1/2 loopback tap reads -30 dBFS on ch4/5.**
    What it does: full-duplex sweep (9 rates × periods ≥
    max(fpu,32)) with a mic-free signal-integrity check (the AS1/2
-   loopback on capture ch10/11, where the 2026-10-17 map puts AS1/2;
+   loopback on capture ch4/5, the identity map's AS1/2 position;
    the old fixed playback tap is gone), start/stop stress, and
    --mixer-restore (48V+gain survive unbind/rebind).  It caught two
    real driver bugs, both fixed: (a) playback overrunning the app ring
@@ -755,8 +775,9 @@ sound card in PipeWire:
    the driver no longer converts the 16-bit value to the 8-bit code
    through a log table; the 16-bit register is derived from the step.
 
-**Measured parity (loopback AN1/2 OUT → capture ch10/11, 440 Hz sine at
-−8 dBFS source, 48 kHz):** aplay direct = −9.38 dBFS RMS; pw-cat via the
+**Measured parity (loopback of the playback tap → capture ch10/11 under
+  the 2026-10-17 map; the tap is on ch4/5 with the identity map), 440 Hz
+  sine at −8 dBFS source, 48 kHz):** aplay direct = −9.38 dBFS RMS; pw-cat via the
 kernel sink at volume 1.0 = −9.55 dBFS RMS (≈0.2 dB conversion residue,
 S32→S24).  Loopback round-trip latency still 2.88 ms / 0 xruns (looplat,
 period 192 and 512).  The sound panel volume (Phones master, control

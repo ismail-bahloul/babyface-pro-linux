@@ -600,29 +600,24 @@ static bool babyface_capture_copy(struct snd_usb_babyface *chip,
 
 		dst = rt->dma_area + frames_to_bytes(rt, pos);
 		for (i = 0; i < chans; i++) {
-			/* Channel map: app ch0-3 = words 0-3 (AN1-4);
-			 * app ch4-9 = words 6-11 (ADAT3-8); app ch10/11
-			 * = words 4/5 (AS1/2).  The AS1/2 placement was
-			 * confirmed live on 2026-10-17 with the device's
-			 * own loopback: a tone on the AS1/2 output bus
-			 * appeared on app ch10/11 with the map above. The
-			 * old "words 4/5 are a fixed marker" note was
-			 * wrong.  Words 12/13 (the old playback echo tap)
-			 * are no longer exposed: the PCM keeps its 12
-			 * channels, now all hardware inputs.  At 96/192
-			 * kHz the frame has fewer words; missing ones read
-			 * as zero.
+			/* The frame carries the device's own order: AN1-4,
+			 * AS1/2, then ADAT3-8 (AS1/2 is the first optical
+			 * pair, so it is ADAT 1/2 when the input receives
+			 * ADAT and S/PDIF when it receives S/PDIF).  The
+			 * PCM follows it one-to-one, so a channel is word i
+			 * and the device order is what an application sees.
+			 * Confirmed live on 2026-10-17 with the device's own
+			 * loopback: a tone on the AS1/2 output bus appeared
+			 * on words 4/5.  At 96/192 kHz the frame has fewer
+			 * words (10/8); the channels past them read as zero.
 			 */
-			static const u8 map[12] = { 0, 1, 2, 3, 6, 7, 8, 9,
-						   10, 11, 4, 5 };
-			u8 wi = i < 12 ? map[i] : 0xff;
 			s32 s = 0;
 
-			if (wi < words) {
+			if (i < words) {
 				/* 24-bit sample in bits 31-8 of the 32-bit word;
 				 * S32_LE with 24 msbits, so copy the word as-is.
 				 */
-				s = (s32)le32_to_cpu(w[wi]);
+				s = (s32)le32_to_cpu(w[i]);
 			}
 			put_unaligned_le32((u32)s, dst + i * 4);
 		}
