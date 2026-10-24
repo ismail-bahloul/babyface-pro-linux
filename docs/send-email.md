@@ -46,12 +46,12 @@ git format-patch --rfc --cover-letter -v4 -o /tmp/v4 origin/master..v4b
 
 **Two traps that bit v4 while it was being cut:**
 
-1. The linux-next clone's local git config still says
-   `Iswad <iswadlillah@gmail.com>`. The commits are fine (they were
+1. The linux-next clone's local git config used to say
+   `Iswad <iswadlillah@gmail.com>`. The commits were fine (they were
    made with `-c user.name/-c user.email`), but `format-patch` stamps
    the **cover letter** with the config identity, so it came out under
-   the old name while every patch said the right one. Either fix the
-   clone's local config or pass `--from=`.
+   the old name while every patch said the right one. Check
+   `git config user.email` in the clone, or pass `--from=`.
 2. Do not put a line of dashes in a commit message. A
    `----------------` underline under a section heading looks like the
    `---` separator to `git am`, which truncates the message there.
