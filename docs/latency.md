@@ -86,10 +86,35 @@ The few xruns at 16 to 32 frames do not grow as the period shrinks: they are
 system latency events (CPU frequency, interrupts), so at these sizes tuning
 the system matters more than the driver.
 
-These rows measure stability, not round-trip latency. The round-trip figures
-in `KERNEL-DRIVER.md` come from the earlier fixed-size URBs (2026-08-24),
-where the latency did not follow the period; they no longer describe the
-driver.
+These rows measure stability, not latency. The round-trip figures in
+`KERNEL-DRIVER.md` come from the earlier fixed-size URBs (2026-08-24), where
+the latency did not follow the period; they no longer describe the driver.
+
+### Round-trip latency
+
+Measured on 2026-10-26 with `tools/kernel/delay-sweep.sh` (`looplat
+--delay`): a Babyface Pro FS, 48 kHz, the digital AS1/2 loopback tap, a
+buffer of 2 periods, one period read and one written in lockstep, 8 seconds
+per period, one run each. The impulse is written, then seen coming back:
+
+| period | measured round trip | the delay the driver reports |
+|---|---|---|
+| 32 (0.67 ms) | 138 frames, 2.88 ms | 152 frames |
+| 48 | 186 frames, 3.88 ms | 200 frames |
+| 64 (1.33 ms) | 234 frames, 4.88 ms | 248 frames |
+| 96 | 330 frames, 6.88 ms | 344 frames |
+| 128 (2.67 ms) | 426 frames, 8.88 ms | 440 frames |
+| 256 (5.33 ms) | 810 frames, 16.88 ms | 806 frames |
+
+The round trip is **3 periods plus 42 frames (0.9 ms)** at every period, with
+2 or with 12 channels. The delay the driver reports to ALSA follows it to
+within 14 frames (0.3 ms), and that gap does not grow with the period, so a
+sound server compensating with the reported delay is right to within that.
+
+This path is digital and carries no converter delay, and it is read and
+written with `read`/`write`, not mmap. A run with PH3/4 cabled into IN3 (run
+the script with `DETECT=2`) would add the converters; there is no such
+figure here yet.
 
 ## Measuring your own
 
@@ -100,6 +125,10 @@ its own delay to ALSA (the URBs in flight plus a fixed delay inside the
 card), so a sound server already compensates for it, and the residual is
 smaller than the total. Compare like with like: total against total, residual
 against residual, at the same period and rate.
+
+`sh tools/kernel/delay-sweep.sh` prints the table above for your own card
+(stop nothing, but keep the card free of other streams, and turn the monitors
+down: it plays a click on playback channels 1/2).
 
 There is no latency figure here for the class-compliant mode, which uses the
 generic USB audio driver with its own buffering. If you compare the two modes
