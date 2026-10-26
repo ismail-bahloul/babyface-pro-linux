@@ -7,7 +7,7 @@ unmodified on an original (non-FS) Babyface Pro.
 
 32 to 192 kHz, 2 to 12 channels, interrupt-URB, full-duplex. 32-frame URBs
 (0.67 ms at 48 kHz) run clean across the sweep, with one open issue, see
-[Latency profiles](latency.md). 16-frame URBs (0.33 ms, monitoring-grade) are
+[Latency](latency.md). 16-frame URBs (0.33 ms, monitoring-grade) are
 playback-solid but drop the occasional capture buffer.
 
 ## Mixer (ALSA controls)
