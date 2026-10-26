@@ -35,6 +35,6 @@ walkthrough in [`LINUX-TEST.md`](../LINUX-TEST.md).
 
 ## Next
 
-- Tune the latency: [Latency profiles](latency.md).
+- Tune the latency: [Latency](latency.md).
 - Control the mixer from a GUI:
   [TuxMix](https://github.com/ismail-bahloul/TuxMix).
