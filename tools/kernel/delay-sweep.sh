@@ -13,10 +13,12 @@
 # and run with DETECT=2.
 #
 # Before you run it:
-#   - stop the sound server, which holds the card:
+#   - no stream may be open on the card.  A sound server that is not playing
+#     to it is fine (check: cat /proc/asound/cardN/pcm0p/sub0/status says
+#     "closed").  If the run says the device is busy, stop the sound server:
 #       systemctl --user stop pipewire.socket pipewire.service wireplumber.service
 #   - turn the monitors and the headphones down: the test sends a click on
-#     playback channels 1/2 every half second.
+#     playback channels 1/2 every half second, through the mixer's routing.
 #
 # Usage: sh delay-sweep.sh [-y] [seconds]        (default 10 s per period)
 #   CARD=<number|id>   the card (default: the first "Babyface" in /proc/asound/cards)
@@ -39,8 +41,8 @@ BIN="${TMPDIR:-/tmp}/looplat"
 [ -x "$BIN" ] || gcc -O2 -o "$BIN" "$SRC" -lasound -lpthread || exit 1
 
 if [ "$ASK" = 1 ]; then
-	echo "This stops nothing, but the card must be free (stop the sound server)"
-	echo "and it plays a click on its outputs: turn the monitors and headphones down."
+	echo "The card must have no stream open, and the test plays a click on its"
+	echo "outputs: turn the monitors and headphones down."
 	printf "Press Enter to start, Ctrl-C to cancel. "
 	read -r _
 fi
