@@ -26,12 +26,13 @@ stored separately in c4.
 
 ## The (freq, Q, gain, type) → coefficients mapping
 
-**BELL (peaking) — exact RBJ cookbook**, normalized by a0:
+**BELL (peaking) — the RBJ cookbook with α = sin(w0/(2Q))** (not the
+cookbook's own sin(w0)/(2Q): see "Frequency warping" below), normalized by a0:
 
 ```
 A   = 10^(gain_dB/40)
 w0  = 2π·freq/fs            (fs = 48000)
-α   = sin(w0)/(2Q)
+α   = sin(w0/(2Q))         (angle held to π/2 in the driver)
 c   = cos(w0)
 b0 = 1 + αA    b1 = -2c    b2 = 1 - αA
 a0 = 1 + α/A   a1 = -2c    a2 = 1 - α/A
@@ -47,8 +48,8 @@ stored: c0=a1′, c1=a2′, c2=b1′/b0′, c3=b2′/b0′, c4=b0′   (each ×2
   for every Q.
 - cap_eq8a (freq sweep 50..10000 Hz, +6 dB, Q=0.7): the stored values
   match the RBJ prediction to ~1e-7 at low freq, drifting to ~1e-2 at
-  10 kHz — the residual drift is a frequency-warping detail still open
-  (see below), not a structural error.
+  10 kHz — the residual drift is TotalMix's α, sin(w0/(2Q)) rather than
+  sin(w0)/(2Q) (explained 2026-10-26, see "Frequency warping" below).
 - cap_eq8d (shelf +6/0/-6): same structure; shelf uses the RBJ shelf
   formula (high-freq shelf coeffs go near -0.985 as documented).
 
@@ -80,7 +81,26 @@ that confused earlier fits is the 2³¹/2²⁷ scale).
 
 ## Still open (small)
 
-1. **Frequency warping at high freq — CHARACTERIZED 2026-08-25
+1. **Frequency warping at high freq — RESOLVED 2026-10-26: α = sin(w0 /
+   (2Q)).** Found by the authors of issue #31 from captures of RME's driver
+   on a Babyface Pro rev 6 (firmware 211, 44.1 kHz, Q 0.7 to 5, 100 Hz to
+   15 kHz): every stored word lies within 308 units (of 2^-27) of the
+   cookbook's peaking and shelving formulas with that α, where
+   sin(w0)/(2Q) is off by 5.7e4 units at 1 kHz and 5.1e7 at 15 kHz. It also
+   reproduces the effective-Q table below, measured from cap_eq10 at 48 kHz:
+   Q 0.7 at 8, 10, 12 and 16 kHz gives 0.637, 0.600, 0.555 and 0.434 (table
+   0.635, 0.60, 0.555, 0.435), and Q 5 at 8, 16 and 20 kHz gives 4.14, 2.08
+   and 0.97 (table 4.17, 2.10, 0.97), all within 1 %. The one point that does
+   not follow is Q 0.7 at 20 kHz (0.262 against 0.295), which the table puts
+   in the fit's residual floor. The effective Q is the cookbook Q that has
+   the same α: Q_eff = sin(w0) / (2 sin(w0 / (2Q))). `eq_selftest` now
+   checks the driver against that table. Where w0 / (2Q) passes π/2 (a low Q
+   at a high frequency) the driver holds the angle there, as the captures
+   do not reach that far and sin() would fall towards a vanishing α. The
+   characterization below is kept as the record of how it was found; its
+   "Practical" paragraph is superseded.
+
+   Characterized 2026-08-25
    (cap_eq10.pcap, dense 1-20 kHz sweep at Q 0.7 and Q 5, +6 dB):
    the pure-RBJ w0 = 2πf/fs is exact to ~1e-4 below 2 kHz, then a
    small deviation grows. Full-parameter fit per state:
@@ -101,6 +121,7 @@ that confused earlier fits is the 2³¹/2²⁷ scale).
    4 kHz. Inaudible; keep the pure RBJ cookbook (the current
    `eq_band_storage`), optionally apply the Q_eff table for exact
    GUI display. The tools `eq_warp*.py` document the fits.
+   **Superseded:** use α = sin(w0/(2Q)), see above.
 2. **Shelf exact formula — PINNED 2026-08-24 (cap_eq8d)**: the shelf is
    the RBJ shelf with **α = sin(w0)/(2Q)** (the same Q-driven α as the
    bell) and the CORRECT low/high cos signs. Two bugs were in the old
@@ -112,7 +133,9 @@ that confused earlier fits is the 2³¹/2²⁷ scale).
    from the stored a1'/a2' of the +6/−6 @200 Hz states): 0.01869886 vs
    sin(w0)/(2·0.7) = 0.01869782 — matches to 5.6e-5 (the residual is
    the shared high-freq warping, see item 1). Verified to ~1e-6 on the
-   100/200 Hz states, ~2.6e-4 at 1 kHz, drifting at ≥6 kHz (warping).
+   100/200 Hz states, ~2.6e-4 at 1 kHz, drifting at ≥6 kHz (warping). At
+   200 Hz sin(w0)/(2Q) and sin(w0/(2Q)) agree, so this check does not tell
+   them apart; the shelves use the α of item 1.
 3. The block header byte 1 = 0x00 for band EQ (0x03 = low cut, 2^n−1).
 4. **2-bands-simultaneous c4@0x34 — STRUCTURALLY VERIFIED (2026-08-24,
    cap_eq8e + eqfit)**: the shared 0x34 follows the LAST-written band.
@@ -130,7 +153,9 @@ that confused earlier fits is the 2³¹/2²⁷ scale).
 fn band_storage(freq: f32, q: f32, gain_db: f32, fs: f32) -> [i32; 5] {
     let a = 10f32.powf(gain_db / 40.0);
     let w0 = 2.0 * std::f32::consts::PI * freq / fs;
-    let alpha = w0.sin() / (2.0 * q);
+    // TotalMix's alpha, not the cookbook's w0.sin() / (2.0 * q); the angle
+    // is held to pi/2 (see "Frequency warping").
+    let alpha = (w0 / (2.0 * q)).min(std::f32::consts::FRAC_PI_2).sin();
     let c = w0.cos();
     let (b0, b1, b2) = (1.0 + alpha * a, -2.0 * c, 1.0 - alpha * a);
     let (a0, a1, a2) = (1.0 + alpha / a, -2.0 * c, 1.0 - alpha / a);

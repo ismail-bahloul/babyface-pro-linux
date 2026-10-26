@@ -27,7 +27,10 @@ static void ref_words(double *w, int type, int32_t freq_hz, int32_t q100,
 	double q = q100 / 100.0;
 	double w0 = 2.0 * M_PI * freq_hz / fs;
 	double A = pow(10.0, g / 40.0);
-	double al = sin(w0) / (2.0 * q);
+	/* alpha = sin(w0 / (2Q)) as TotalMix computes it, the angle held to
+	 * pi/2 as in the driver */
+	double u = w0 / (2.0 * q);
+	double al = sin(u > M_PI / 2 ? M_PI / 2 : u);
 	double co = cos(w0);
 	double b0, b1, b2, a0, a1, a2;
 
@@ -135,6 +138,44 @@ int main(void)
 			if (fabs(peak - g) > 0.05 || fabs(dc) > 0.05 ||
 			    fabs(ny) > 0.05) {
 				printf("ERR response-domain check failed\n");
+				fails++;
+			}
+		}
+	}
+
+	/* effective Q at high frequency, against what RME's unit did: the
+	 * cap_eq10 sweep of a +6 dB bell at 48 kHz, in
+	 * tools/usbdump/eq_biquad.md.  The cookbook Q that has the same
+	 * alpha as the stored words; alpha comes back from a2' = (1 - a/A) /
+	 * (1 + a/A).  The 4 kHz row of that table is only "0.70 and below"
+	 * and the 20 kHz row at Q 0.7 sits in the fit's residual floor, so
+	 * neither is checked. */
+	{
+		static const struct {
+			int32_t f, q100;
+			double qeff;
+		} cap[] = {
+			{ 8000, 70, 0.635 }, { 10000, 70, 0.60 },
+			{ 12000, 70, 0.555 }, { 16000, 70, 0.435 },
+			{ 8000, 500, 4.17 }, { 16000, 500, 2.10 },
+			{ 20000, 500, 0.97 },
+		};
+		double A = pow(10.0, 6.0 / 40.0);
+		int n;
+
+		for (n = 0; n < (int)(sizeof(cap) / sizeof(cap[0])); n++) {
+			int32_t w[5];
+			double w0 = 2 * M_PI * cap[n].f / fs;
+			double a2, al, qeff;
+
+			bf_eq_band_words(w, 1, cap[n].f, cap[n].q100, 60, fs);
+			a2 = w[1] / (double)BF_EQ_Q27;
+			al = A * (1 - a2) / (1 + a2);
+			qeff = sin(w0) / (2 * al);
+			printf("effective Q %5d Hz Q %.1f: %.3f (RME %.3f)\n",
+			       cap[n].f, cap[n].q100 / 100.0, qeff, cap[n].qeff);
+			if (fabs(qeff - cap[n].qeff) > 0.02 * cap[n].qeff) {
+				printf("ERR effective Q off RME's by more than 2%%\n");
 				fails++;
 			}
 		}

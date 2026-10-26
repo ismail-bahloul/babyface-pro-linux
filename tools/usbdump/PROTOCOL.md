@@ -1749,8 +1749,9 @@ where ′ = RBJ coeffs normalized by a0, and the stored word = value ×2²⁷
 (signed i32 — the ×16 that confused earlier fits is 2³¹/2²⁷). The DSP
 reconstructs b0 = c4, b1 = c2·c4, b2 = c3·c4, a1 = c0, a2 = c1.
 
-**BELL = exact RBJ peaking**: A = 10^(dB/40), w0 = 2πf/fs, α =
-sin(w0)/(2Q), b0 = 1+αA, b1 = −2cos(w0), b2 = 1−αA, a0 = 1+α/A, a1 =
+**BELL = RBJ peaking with α = sin(w0/(2Q))** (it was read as the
+cookbook's sin(w0)/(2Q) until 2026-10-26, see eq_biquad.md): A = 10^(dB/40),
+w0 = 2πf/fs, b0 = 1+αA, b1 = −2cos(w0), b2 = 1−αA, a0 = 1+α/A, a1 =
 −2cos(w0), a2 = 1−α/A (normalize by a0). **0 dB = all-zero slot + c4
 = 0x08000000** (identity). Gain sign flip = c0↔c2, c1↔c3 mirror
 (= the b1′=a1′ peaking identity under the two normalizations).
@@ -1759,8 +1760,8 @@ sin(w0)/(2Q), b0 = 1+αA, b1 = −2cos(w0), b2 = 1−αA, a0 = 1+α/A, a1 =
 reconstructed response peaks/notches at EXACTLY 200 Hz with EXACTLY the
 labeled gain (−20..+20 dB, ±0.000 dB), DC & Nyquist = 0 dB (true bell);
 cap_eq8b Q sweep (0.7..5) — +6.000 dB @ 200 Hz for every Q; cap_eq8a
-freq sweep — ~1e-7 at low freq, drifting to ~1e-2 at 10 kHz (a mild
-frequency-warping detail, see eq_biquad.md "Still open"). cap_eq8d
+freq sweep — ~1e-7 at low freq, drifting to ~1e-2 at 10 kHz (explained
+since 2026-10-26: α = sin(w0/(2Q)), see eq_biquad.md "Still open"). cap_eq8d
 (shelf) uses the same structure.
 
 `tuxmix-usb` now has `protocol::eq_band_storage` + `set_eq_band` (the
