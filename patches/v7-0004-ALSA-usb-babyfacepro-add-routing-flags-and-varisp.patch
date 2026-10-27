@@ -1,6 +1,6 @@
-From 380a946e3df784f9c3ea648d54c5acea995232b3 Mon Sep 17 00:00:00 2001
+From c90957a546205697d8d380beb3a97360fcc78bac Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Fri, 23 Oct 2026 11:37:11 +0200
+Date: Tue, 27 Oct 2026 11:13:20 +0100
 Subject: [PATCH v7 4/8] ALSA: usb: babyfacepro: add routing flags and
  varispeed pitch
 MIME-Version: 1.0
@@ -28,7 +28,7 @@ Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
  3 files changed, 877 insertions(+), 14 deletions(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index a67554d39..eeb207994 100644
+index 60604242b..39584ec71 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
 @@ -10,8 +10,10 @@
@@ -42,7 +42,7 @@ index a67554d39..eeb207994 100644
  #include <linux/unaligned.h>
  #include <linux/usb.h>
  #include <linux/workqueue.h>
-@@ -261,7 +263,9 @@ int babyface_write_default_mixer(struct snd_usb_babyface *chip)
+@@ -252,7 +254,9 @@ int babyface_write_default_mixer(struct snd_usb_babyface *chip)
  			chip->xpoint[out][src][1] = level;
  		}
  
@@ -53,7 +53,7 @@ index a67554d39..eeb207994 100644
  	return bf_settings_write(chip);
  }
  
-@@ -386,6 +390,11 @@ static int bf_master_put(struct snd_kcontrol *kctl,
+@@ -377,6 +381,11 @@ static int bf_master_put(struct snd_kcontrol *kctl,
  
  	chip->master[out][0] = l;
  	chip->master[out][1] = r;
@@ -65,7 +65,7 @@ index a67554d39..eeb207994 100644
  	ret = 1;
  out:
  	mutex_unlock(&chip->mutex);
-@@ -1416,3 +1425,699 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
+@@ -1280,3 +1289,699 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
  	}
  	return 0;
  }
@@ -766,7 +766,7 @@ index a67554d39..eeb207994 100644
 +	return 0;
 +}
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index 107e845db..e876cab27 100644
+index c2835e2d6..ed4555c71 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
 @@ -100,14 +100,26 @@ int bf_vendor_read(struct snd_usb_babyface *chip, u8 req, u16 idx, u8 *buf)
@@ -824,7 +824,7 @@ index 107e845db..e876cab27 100644
  			      BF_REG_KEEPALIVE_INIT);
  	if (ret < 0)
  		return ret;
-@@ -304,14 +321,111 @@ int babyface_restore_state(struct snd_usb_babyface *chip)
+@@ -300,14 +317,111 @@ int babyface_restore_state(struct snd_usb_babyface *chip)
  	return bf_pitch_write(chip, chip->pitch);
  }
  
@@ -941,7 +941,7 @@ index 107e845db..e876cab27 100644
  
  	/* Re-apply any engaged Phase invert - the crosspoint restore loop
  	 * above already re-wrote xpoint[][] as PLAIN values, so a phase
-@@ -1505,6 +1619,14 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1525,6 +1639,14 @@ static int babyface_probe(struct usb_interface *intf,
  		dev_err(&intf->dev, "default mixer restore failed: %d\n", err);
  		goto error;
  	}
@@ -956,7 +956,7 @@ index 107e845db..e876cab27 100644
  	/* Keep the allocation size independent of the active USB mode. */
  	urbsize = BF_WORDS_PER_FRAME * sizeof(u32) * chip->frames_per_urb;
  	chip->urbs_in = kcalloc(chip->nurbs, sizeof(*chip->urbs_in), GFP_KERNEL);
-@@ -1573,6 +1695,12 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1593,6 +1715,12 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -970,7 +970,7 @@ index 107e845db..e876cab27 100644
  	if (err < 0) {
  		dev_err(&intf->dev, "snd_card_register failed: %d\n", err);
 diff --git a/sound/usb/babyfacepro/babyfacepro.h b/sound/usb/babyfacepro/babyfacepro.h
-index ccf1cb043..e3e998bbb 100644
+index 156a8c7dd..a6e231f5f 100644
 --- a/sound/usb/babyfacepro/babyfacepro.h
 +++ b/sound/usb/babyfacepro/babyfacepro.h
 @@ -115,9 +115,17 @@
@@ -992,9 +992,9 @@ index ccf1cb043..e3e998bbb 100644
  
  /* Preamp state byte (0x17, wIdx 0x003F - full state, verified).
   * NOTE 2026-08-26 (cap_reflevel3.pcap): the 0x0C "base" is NOT a
-@@ -174,6 +182,15 @@
- #define BF_REG_LOWMAP_BASE_L		0x0000	/* + idx_l */
- #define BF_REG_LOWMAP_BASE_R		0x001a	/* + idx_r */
+@@ -182,6 +190,15 @@
+ #define BF_REG_LOWMAP_BASE_L		BF_REG_XPOINT_BASE_L
+ #define BF_REG_LOWMAP_BASE_R		BF_REG_XPOINT_BASE_R
  
 +#define BF_REQ_LOOPBACK			0x15	/* per-output-channel flag */
 +
@@ -1008,7 +1008,7 @@ index ccf1cb043..e3e998bbb 100644
  /* The "cross" register block within each output: the L-registers sit at
   * odd offsets 5..23 and the R-registers at even offsets 4..22 (the stereo
   * source pairs that can be cross-linked).  bf_crosspoint_clear_cross()
-@@ -325,6 +342,17 @@ struct snd_usb_babyface {
+@@ -332,6 +349,17 @@ struct snd_usb_babyface {
  					 * (0 = +4dBu, the default)
  					 */
  	struct snd_kcontrol *trim_kctl[4]; /* for snd_ctl_notify */
@@ -1026,7 +1026,7 @@ index ccf1cb043..e3e998bbb 100644
  };
  
  struct bf_rate {
-@@ -375,6 +403,8 @@ int bf_trim_apply(struct snd_usb_babyface *chip, int mic, int trim_db2);
+@@ -382,6 +410,8 @@ int bf_trim_apply(struct snd_usb_babyface *chip, int mic, int trim_db2);
  int bf_gain_max_db(int mic);
  int bf_gain_db(int mic, u8 raw);
  u8 bf_gain_raw(int mic, int db);

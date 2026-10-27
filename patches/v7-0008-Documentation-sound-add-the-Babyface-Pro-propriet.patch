@@ -1,6 +1,6 @@
-From 254d764174923706f7b8c00cc90217424be7d270 Mon Sep 17 00:00:00 2001
+From 4ee0ecb96874570721e65d15d4ad0b7a64cbfa67 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Fri, 23 Oct 2026 11:37:13 +0200
+Date: Tue, 27 Oct 2026 11:13:22 +0100
 Subject: [PATCH v7 8/8] Documentation: sound: add the Babyface Pro
  proprietary-mode design doc
 MIME-Version: 1.0

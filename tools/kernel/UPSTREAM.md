@@ -504,12 +504,29 @@ sh tools/kernel/regress.sh --dur 1 --mixer-restore --disconnect-test
 /lib/modules/$(uname -r)/build/scripts/checkpatch.pl --no-tree --file <file>
 ```
 
-## v7 - CUT 2026-10-23, not sent
+## v7 - RE-CUT 2026-10-27, not sent
 
 Folds in the fixes made since v6 on the same 8-patch split and the same
-base (next-20261002).  Integration branch `v7b` in
-`~/DATA/05_Code/linux-next-src`; patches in `patches/v7-*.patch`;
-scratch trees and the recut scripts in `.recut/v7c/`.
+base (next-20261002).  First cut 2026-10-23; re-cut 2026-10-27 to pick
+up the four kernel changes that landed on main after it, each one
+folded into the patch that owns the code:
+
+- the crosspoint map, one block per output pair (#36): patches 2 and
+  3, and the panel path in patch 6.
+- the EQ's alpha is sin(w0 / (2Q)) (#35): patch 7.
+- one and a half periods of URBs in flight from 128 frames (#37):
+  patch 1.
+- the OUT wheel's Opt target is AS1/2, not ADAT7/8 (#12): patch 6.
+
+That last one left the fader curve unused where patch 3 used to use it
+(the trim no longer writes the fader-plus-trim sum, whose block turned
+out to be AS1/2's submix), so the curve and its two converters now
+arrive with patch 6, which is where the panel needs them.  Every state
+still builds without an unused-function warning.
+
+Integration branch `v7b` in `~/DATA/05_Code/linux-next-src`; patches in
+`patches/v7-*.patch`; scratch trees and the recut scripts in
+`.recut/v7c/`.
 
 What changed since v6:
 
@@ -528,18 +545,24 @@ What changed since v6:
   with `bf_seen` instead of the saved-state list.
 - All patches: ASCII separator comments dropped (#19).
 
-Validated: every state builds out-of-tree and in-tree with `W=1` and
-no warnings; `git am` of `patches/v7-*.patch` on `origin/master`
-reproduces `v7b` exactly; checkpatch --strict on the generated files
-reports 0 errors, 4 warnings and 2 checks (the known 'ang' x2, BIT()
-for a signed Q27 constant, the MAINTAINERS note on the two patches
-that add files, and CamelCase on `bInterfaceNumber`).
+Validated (re-cut, 2026-10-27): all seven code states build both
+out-of-tree (`W=1`) and in-tree against next-20261002 (`make W=1
+sound/usb/babyfacepro/`) with no warnings; `git am` of
+`patches/v7-0001..0008` on `origin/master` reproduces `v7b` exactly;
+checkpatch --strict via stdin on the generated patches reports 0
+errors, 4 warnings and 2 checks (the known 'ang' x2, BIT() for a signed
+Q27 constant, the MAINTAINERS note on the two patches that add files,
+and CamelCase on `bInterfaceNumber`).  The cover letter carries the
+four new fixes.
 
-Hardware (Pro FS, 7.2.11, the new module loaded): `regress.sh
---mixer-restore --disconnect-test` 41/41, the mmap sweep 38/38, the
-AS1/2 loopback read on ch4/5 at about -30 dBFS, `pcmlate` PASS at
-periods 256/1024/2048 @48 kHz, and a one-second tone through `dmix`
-plays and returns.
+Hardware, Pro FS, the re-cut module loaded on 7.3.0-4: `regress.sh
+--mixer-restore --disconnect-test` 41/41, and the panel and `Optical
+Out Format` controls come up after the reload.  The fuller run on the
+first cut (7.2.11) also had the mmap sweep 38/38, the AS1/2 loopback
+on ch4/5 at about -30 dBFS, `pcmlate` PASS at periods 256/1024/2048
+@48 kHz, and a one-second tone through `dmix` playing and returning.
+The OUT=Opt wheel target is the one part of the re-cut that is still
+not confirmed by turning the wheel.
 
 Decision 2026-10-23: do not send a v7 email.  v6 drew no reply and the
 lists are busy; keep the series ready and go in as a direct submission

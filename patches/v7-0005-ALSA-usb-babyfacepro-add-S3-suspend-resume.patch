@@ -1,6 +1,6 @@
-From 26edc11c20ed9a495fe841cd1ecd7b440ff2e5f0 Mon Sep 17 00:00:00 2001
+From f73697f6579fba730ba2c6f6ef717e650c1b54a4 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Fri, 23 Oct 2026 11:37:12 +0200
+Date: Tue, 27 Oct 2026 11:13:21 +0100
 Subject: [PATCH v7 5/8] ALSA: usb: babyfacepro: add S3 suspend/resume
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -26,7 +26,7 @@ Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
  2 files changed, 85 insertions(+), 15 deletions(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index e876cab27..a21f7fe78 100644
+index ed4555c71..e0eb0ce9b 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
 @@ -3,7 +3,8 @@
@@ -72,7 +72,7 @@ index e876cab27..a21f7fe78 100644
   */
  int babyface_restore_state(struct snd_usb_babyface *chip)
  {
-@@ -394,10 +404,8 @@ int bf_state_apply_flags(struct snd_usb_babyface *chip)
+@@ -390,10 +400,8 @@ int bf_state_apply_flags(struct snd_usb_babyface *chip)
  	}
  
  	/* Re-apply an engaged DIM (the fixed -20 dB Phones pair + flag).  The
@@ -85,7 +85,7 @@ index e876cab27..a21f7fe78 100644
  	 */
  	if (chip->dim) {
  		chip->dim_saved[0] = chip->master[1][0];
-@@ -842,8 +850,9 @@ static int babyface_stream_start(struct snd_usb_babyface *chip)
+@@ -838,8 +846,9 @@ static int babyface_stream_start(struct snd_usb_babyface *chip)
  	/* A session start is what the RME Windows driver sends
  	 * (cap_audio): the trigger pair, the URBs, the arm.  The device
  	 * keeps its mixer state between sessions, so nothing is cleared
@@ -97,7 +97,7 @@ index e876cab27..a21f7fe78 100644
  	 */
  	ret = bf_clock_write(chip);
  	if (ret < 0)
-@@ -1526,7 +1535,8 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1546,7 +1555,8 @@ static int babyface_probe(struct usb_interface *intf,
  	chip->card = card;
  
  	chip->dev = usb_get_dev(dev);
@@ -107,7 +107,7 @@ index e876cab27..a21f7fe78 100644
  	 * reference while streaming, so an autosuspend request could race
  	 * a live stream.  Disable it explicitly rather than ship an
  	 * untested code path - full autosuspend support (correct
-@@ -1768,6 +1778,63 @@ static void babyface_disconnect(struct usb_interface *intf)
+@@ -1788,6 +1798,63 @@ static void babyface_disconnect(struct usb_interface *intf)
  	snd_card_free_when_closed(chip->card);
  }
  
@@ -171,7 +171,7 @@ index e876cab27..a21f7fe78 100644
  static const struct usb_device_id babyface_ids[] = {
  	{ USB_DEVICE(USB_VENDOR_RME, USB_PRODUCT_BABYFACE_PRO_FS) },
  	{ }
-@@ -1778,6 +1845,9 @@ static struct usb_driver babyface_driver = {
+@@ -1798,6 +1865,9 @@ static struct usb_driver babyface_driver = {
  	.name = "snd-usb-babyface-pro",
  	.probe = babyface_probe,
  	.disconnect = babyface_disconnect,
@@ -182,7 +182,7 @@ index e876cab27..a21f7fe78 100644
  };
  
 diff --git a/sound/usb/babyfacepro/babyfacepro.h b/sound/usb/babyfacepro/babyfacepro.h
-index e3e998bbb..c2beb1235 100644
+index a6e231f5f..259f7d3a0 100644
 --- a/sound/usb/babyfacepro/babyfacepro.h
 +++ b/sound/usb/babyfacepro/babyfacepro.h
 @@ -12,7 +12,7 @@
@@ -194,7 +194,7 @@ index e3e998bbb..c2beb1235 100644
   * babyfacepro-ctl.c holds the ALSA control surface - the hardware
   * mixer.
   *
-@@ -379,7 +379,7 @@ void babyface_pcm_stop_both(struct snd_usb_babyface *chip, snd_pcm_state_t state
+@@ -386,7 +386,7 @@ void babyface_pcm_stop_both(struct snd_usb_babyface *chip, snd_pcm_state_t state
  void babyface_stream_work(struct work_struct *work);
  extern const struct snd_pcm_hw_constraint_list bf_rates_constraint;
  

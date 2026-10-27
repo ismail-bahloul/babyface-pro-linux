@@ -1,6 +1,6 @@
-From 254d764174923706f7b8c00cc90217424be7d270 Mon Sep 17 00:00:00 2001
+From 4ee0ecb96874570721e65d15d4ad0b7a64cbfa67 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Fri Oct 23 11:37:13 2026 +0200
+Date: Tue Oct 27 11:13:22 2026 +0100
 Subject: [RFC PATCH v7 0/8] ALSA: usb: add RME Babyface Pro driver (proprietary mode)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -43,6 +43,30 @@ Changes since v6:
    the optical port between ADAT (default) and S/PDIF, bit 10 of the
    host settings word.
 
+ - Crosspoint map (patch 2).  The matrix addressed the output pairs
+   through a block table that shifted every pair but the first: a
+   control labelled PH3/4 fed AS1/2, and so on, and the AN1/2-only
+   features also wrote into AS1/2's submix.  The blocks are at
+   0x0034 * pair in the canonical order and the table is gone; the
+   separate "low map" is that first block, not a layer beside it.
+   Measured on the unit with a loopback capture.
+
+ - URBs in flight (patch 1).  At periods of 128 and 256 frames the
+   period is split into two URBs and one and a half periods are kept in
+   flight, which takes half a period off the round trip (554 to 490
+   frames at 128 through PipeWire).  Soaked for ten minutes at both
+   sizes, full duplex, with no xruns.
+
+ - EQ (patch 7).  A band's alpha is sin(w0 / (2Q)), the way TotalMix
+   computes it, not the cookbook's sin(w0) / (2Q): the two agree while
+   w0 is small and part ways as it grows, which is the effective Q that
+   shrinks above a few kHz in the measured response.
+
+ - Front panel (patch 6).  The OUT wheel moved ADAT7/8 with Opt
+   selected.  It moves AS1/2, the first optical pair, which is the same
+   mixer output in ADAT and S/PDIF mode, so the target does not follow
+   the format.
+
  - Re-probes (patches 2, 5, 6, David Fredman).  The driver no longer
    saves its mixer state at disconnect and restores it at the next
    probe: udev's alsactl restore overwrote it on every card add, so a
@@ -66,7 +90,7 @@ patch 2 and the documentation in patch 8), and the CamelCase check on
 the USB descriptor's bInterfaceNumber.
 
 Validated on the unit with the final tree (out-of-tree against
-7.2.11):
+7.3.0):
 
  - regress.sh --mixer-restore --disconnect-test passes 41/41: the
    full-duplex sweep of the nine rates at periods 256 to 2048 with no
@@ -120,10 +144,10 @@ Ismaïl Bahloul (8):
  sound/usb/Kconfig                          |   17 +
  sound/usb/Makefile                         |    2 +-
  sound/usb/babyfacepro/Makefile             |    4 +
- sound/usb/babyfacepro/babyfacepro-ctl.c    | 3951 ++++++++++++++++++++
- sound/usb/babyfacepro/babyfacepro.c        | 1966 ++++++++++
- sound/usb/babyfacepro/babyfacepro.h        |  558 +++
- 9 files changed, 6722 insertions(+), 1 deletion(-)
+ sound/usb/babyfacepro/babyfacepro-ctl.c    | 3917 ++++++++++++++++++++
+ sound/usb/babyfacepro/babyfacepro.c        | 1988 ++++++++++
+ sound/usb/babyfacepro/babyfacepro.h        |  565 +++
+ 9 files changed, 6717 insertions(+), 1 deletion(-)
  create mode 100644 Documentation/sound/cards/babyface-pro.rst
  create mode 100644 sound/usb/babyfacepro/Makefile
  create mode 100644 sound/usb/babyfacepro/babyfacepro-ctl.c
