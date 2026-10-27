@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.2 (2026-10-27)
+
+### Fixed
+- The front panel's OUT wheel moved ADAT7/8 when `Opt` was selected. It
+  moves AS1/2, the first optical pair, which is the same mixer output in
+  ADAT and S/PDIF mode, so the target no longer depends on the Optical
+  Out Format setting (#12).
+
+### Changed
+- The series under `patches/` is the one submitted upstream on
+  2026-10-27, `[PATCH v7 0/8]`, rebased on next-20261026.
+
 ## 0.2.1 (2026-10-27)
 
 ### Fixed
