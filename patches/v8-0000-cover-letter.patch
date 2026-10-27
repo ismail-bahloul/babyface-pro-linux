@@ -105,9 +105,11 @@ Validated on the unit with this tree:
    leaves mute, and two counter-clockwise clicks from the old -52 dB
    sticking point move.
 
-TODO(hardware): the physical MIX-wheel gesture still needs one pass
-with the wheel (one click up, one click down at the steps that used to
-stick).  Everything else is covered above.
+ - The physical MIX-wheel gesture was checked on the unit: from a
+   muted AN3 crosspoint, one clockwise click moved it to 0x0004 (the
+   old code left it at 0 for the first five clicks), two clockwise and
+   two counter-clockwise clicks stepped it to 0x0003, and the level
+   followed the wheel in both directions.
 
 Known limitations, unchanged from v7:
 
