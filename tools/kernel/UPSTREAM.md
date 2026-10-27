@@ -506,10 +506,10 @@ sh tools/kernel/regress.sh --dur 1 --mixer-restore --disconnect-test
 
 ## v7 - RE-CUT 2026-10-27, not sent
 
-Folds in the fixes made since v6 on the same 8-patch split and the same
-base (next-20261002).  First cut 2026-10-23; re-cut 2026-10-27 to pick
-up the four kernel changes that landed on main after it, each one
-folded into the patch that owns the code:
+Folds in the fixes made since v6 on the same 8-patch split.  First cut
+2026-10-23 on next-20261002; re-cut 2026-10-27 to pick up the four
+kernel changes that landed on main after it, and rebased onto
+next-20261026.  Each fix is folded into the patch that owns the code:
 
 - the crosspoint map, one block per output pair (#36): patches 2 and
   3, and the panel path in patch 6.
@@ -546,7 +546,7 @@ What changed since v6:
 - All patches: ASCII separator comments dropped (#19).
 
 Validated (re-cut, 2026-10-27): all seven code states build both
-out-of-tree (`W=1`) and in-tree against next-20261002 (`make W=1
+out-of-tree (`W=1`) and in-tree against next-20261026 (`make W=1
 sound/usb/babyfacepro/`) with no warnings; `git am` of
 `patches/v7-0001..0008` on `origin/master` reproduces `v7b` exactly;
 checkpatch --strict via stdin on the generated patches reports 0

@@ -1,4 +1,4 @@
-From e2104a906f70c28dfa781833d6fe6b92c3a7f07a Mon Sep 17 00:00:00 2001
+From 599d82d148a90e71fd47ed6c259fe47ba929b1b0 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:19 +0100
 Subject: [PATCH v7 2/8] ALSA: usb: babyfacepro: add output masters and

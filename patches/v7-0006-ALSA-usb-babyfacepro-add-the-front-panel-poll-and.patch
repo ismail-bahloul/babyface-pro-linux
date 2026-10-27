@@ -1,4 +1,4 @@
-From 98c5ebaa38e2963e60a9d3a97250b21959007385 Mon Sep 17 00:00:00 2001
+From 34189f2b5f13235b901a3c2ce4c9138f0ad400f3 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:21 +0100
 Subject: [PATCH v7 6/8] ALSA: usb: babyfacepro: add the front-panel poll and

@@ -1,4 +1,4 @@
-From 9321075e57d892cc3bc2b960490bff66a77905a3 Mon Sep 17 00:00:00 2001
+From eab85aea9b9bc9ce263435516c1ec0ccf4be6846 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:18 +0100
 Subject: [PATCH v7 1/8] ALSA: usb: add RME Babyface Pro driver core (probe,
@@ -87,10 +87,10 @@ Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
  create mode 100644 sound/usb/babyfacepro/babyfacepro.h
 
 diff --git a/MAINTAINERS b/MAINTAINERS
-index 5c57cbb68..66bf8d297 100644
+index fcff12847..378f528c6 100644
 --- a/MAINTAINERS
 +++ b/MAINTAINERS
-@@ -24049,6 +24049,12 @@ F:	include/dt-bindings/power/thead,th1520-power.h
+@@ -24246,6 +24246,12 @@ F:	include/dt-bindings/power/thead,th1520-power.h
  F:	include/dt-bindings/reset/thead,th1520-reset.h
  F:	include/linux/firmware/thead/thead,th1520-aon.h
  
