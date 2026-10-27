@@ -1,4 +1,4 @@
-From f73697f6579fba730ba2c6f6ef717e650c1b54a4 Mon Sep 17 00:00:00 2001
+From ce9d7ec8025265cb194456015e73ecc6882a9c4d Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:21 +0100
 Subject: [PATCH v7 5/8] ALSA: usb: babyfacepro: add S3 suspend/resume

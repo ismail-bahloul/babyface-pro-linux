@@ -1,4 +1,4 @@
-From c90957a546205697d8d380beb3a97360fcc78bac Mon Sep 17 00:00:00 2001
+From 5dd00b2db2b8eb6e32b9f784fe0ab8aedf859c4d Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:20 +0100
 Subject: [PATCH v7 4/8] ALSA: usb: babyfacepro: add routing flags and
