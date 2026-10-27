@@ -1,0 +1,195 @@
+From 0a4c1b9262c8bae3b819e08935f4f17210c6e6ad Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
+Date: Tue, 27 Oct 2026 11:13:21 +0100
+Subject: [PATCH v8 5/8] ALSA: usb: babyfacepro: add S3 suspend/resume
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The device loses its registers across a system suspend.  On suspend,
+let the PCM core suspend the substreams (applications get -ESTRPIPE and
+restart), then kill the session's URBs before cancelling the stream
+work their handlers queue.  On resume, re-run the cold init and replay
+the cached mixer state and flags.  A resume that follows a device reset
+goes through reset_resume instead of a re-probe, so the cached state is
+replayed in place.
+
+USB autosuspend stays disabled: nothing in the driver holds a PM
+reference while streaming.
+
+Co-developed-by: David Fredman <davfre@gmail.com>
+Signed-off-by: David Fredman <davfre@gmail.com>
+Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
+---
+ sound/usb/babyfacepro/babyfacepro.c | 90 ++++++++++++++++++++++++++---
+ sound/usb/babyfacepro/babyfacepro.h |  4 +-
+ 2 files changed, 83 insertions(+), 11 deletions(-)
+
+diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
+index 4d9f9d74f..e320ad2b4 100644
+--- a/sound/usb/babyfacepro/babyfacepro.c
++++ b/sound/usb/babyfacepro/babyfacepro.c
+@@ -3,7 +3,8 @@
+  * RME Babyface Pro / Pro FS - proprietary-mode USB audio driver
+  *
+  * Core driver: USB vendor requests + cold init, interrupt-URB PCM
+- * streaming, and the card lifecycle (probe/disconnect/module entry).
++ * streaming, the mixer-state replay after a resume, and
++ * the card lifecycle (probe/disconnect/PM/module entry).
+  *
+  * See babyfacepro.h for the shared device state and register map,
+  * and babyfacepro-ctl.c for the ALSA control surface.
+@@ -198,9 +199,9 @@ int bf_pitch_write(struct snd_usb_babyface *chip, int pitch)
+ }
+ 
+ /* The cold-start init (cap_coldplug.pcap), verbatim from the user-space
+- * reference (protocol::streaming_init).  Run at probe, where the
+- * device state is unknown; a session start does not need it (see
+- * babyface_stream_start()).
++ * reference (protocol::streaming_init).  Run at probe and after resume,
++ * where the device state is unknown; a session start does not need it
++ * (see babyface_stream_start()).
+  */
+ int bf_cold_init(struct snd_usb_babyface *chip)
+ {
+@@ -267,8 +268,17 @@ int bf_cold_init(struct snd_usb_babyface *chip)
+ 	return 0;
+ }
+ 
+-/* Re-apply the whole cached mixer state to the device, whose registers
+- * the cold init cleared.  Caller holds chip->mutex.
++/* Units probed since the module was loaded.
++ * The SELECT selection is not in the readback, and the values alsactl
++ * restores right after a probe are the ones of the last alsactl store.
++ * After a boot that is the last shutdown, the newest there is.  A later
++ * probe of the same unit (a usbfs claim released, an unbind, a replug)
++ * may follow SELECT presses made since, so bf_panel_select_put() needs
++ * to tell the two apart.
++ */
++/* Re-apply the whole cached mixer state after a resume (the device
++ * lost its registers across a system suspend - TotalMix does the same
++ * re-apply).  Caller holds chip->mutex.
+  */
+ int babyface_restore_state(struct snd_usb_babyface *chip)
+ {
+@@ -811,8 +821,9 @@ static int babyface_stream_start(struct snd_usb_babyface *chip)
+ 	/* A session start is what the RME Windows driver sends
+ 	 * (cap_audio): the trigger pair, the URBs, the arm.  The device
+ 	 * keeps its mixer state between sessions, so nothing is cleared
+-	 * or re-applied here; the cold init runs at probe only.  The rate
+-	 * is written first: hw_params only re-points the speed multiplier.
++	 * or re-applied here; the cold init runs at probe and resume
++	 * only.  The rate is written first: hw_params only re-points the
++	 * speed multiplier.
+ 	 */
+ 	ret = bf_clock_write(chip);
+ 	if (ret < 0)
+@@ -1529,7 +1540,8 @@ static int babyface_probe(struct usb_interface *intf,
+ 	chip->card = card;
+ 
+ 	chip->dev = usb_get_dev(dev);
+-	/* USB autosuspend is untested: nothing in this driver holds a PM
++	/* USB autosuspend is untested: babyface_suspend()/_resume() don't
++	 * check PMSG_IS_AUTO, and nothing in this driver holds a PM
+ 	 * reference while streaming, so an autosuspend request could race
+ 	 * a live stream.  Disable it explicitly rather than ship an
+ 	 * untested code path - full autosuspend support (correct
+@@ -1785,6 +1797,63 @@ static void babyface_disconnect(struct usb_interface *intf)
+ 	snd_card_free_when_closed(chip->card);
+ }
+ 
++static int babyface_suspend(struct usb_interface *intf, pm_message_t message)
++{
++	struct snd_usb_babyface *chip = usb_get_intfdata(intf);
++
++	struct snd_device *sdev;
++
++	if (!chip)
++		return 0;
++	list_for_each_entry(sdev, &chip->card->devices, list) {
++		if (sdev->type == SNDRV_DEV_PCM)
++			snd_pcm_suspend_all(sdev->device_data);
++	}
++	/* The URB handlers queue the work: kill them first. */
++	mutex_lock(&chip->mutex);
++	if (chip->streaming)
++		babyface_stream_kill(chip);
++	mutex_unlock(&chip->mutex);
++	cancel_work_sync(&chip->stream_work);
++	return 0;
++}
++
++static int babyface_resume(struct usb_interface *intf)
++{
++	struct snd_usb_babyface *chip = usb_get_intfdata(intf);
++	int err;
++
++	if (!chip)
++		return 0;
++
++	/* The device lost its state across the suspend; re-run the cold
++	 * init and re-apply the cached mixer state.  Suspended PCM
++	 * substreams are woken by the core - apps get -ESTRPIPE and
++	 * restart (prepare starts a new session).
++	 *
++	 * This is also the reset_resume handler.  Some hosts reset the
++	 * device on resume; that needs nothing more than the cold init
++	 * already does here, and without the handler the USB core unbinds
++	 * and re-probes the driver instead: the card goes away, open PCMs
++	 * fail, and udev's alsactl restore then loads the mixer state
++	 * stored at the last shutdown over the current one.
++	 */
++	mutex_lock(&chip->mutex);
++	err = usb_set_interface(chip->dev, BF_IFACE, chip->alt);
++	if (err < 0)
++		goto out;
++	err = bf_cold_init(chip);
++	if (err < 0)
++		goto out;
++	err = babyface_restore_state(chip);
++	if (err < 0)
++		goto out;
++	err = bf_state_apply_flags(chip);
++out:
++	mutex_unlock(&chip->mutex);
++	return err;
++}
++
+ static const struct usb_device_id babyface_ids[] = {
+ 	{ USB_DEVICE(USB_VENDOR_RME, USB_PRODUCT_BABYFACE_PRO_FS) },
+ 	{ }
+@@ -1795,6 +1864,9 @@ static struct usb_driver babyface_driver = {
+ 	.name = "snd-usb-babyface-pro",
+ 	.probe = babyface_probe,
+ 	.disconnect = babyface_disconnect,
++	.suspend = babyface_suspend,
++	.resume = babyface_resume,
++	.reset_resume = babyface_resume,
+ 	.id_table = babyface_ids,
+ };
+ 
+diff --git a/sound/usb/babyfacepro/babyfacepro.h b/sound/usb/babyfacepro/babyfacepro.h
+index 1d4c358d9..a32849f83 100644
+--- a/sound/usb/babyfacepro/babyfacepro.h
++++ b/sound/usb/babyfacepro/babyfacepro.h
+@@ -12,7 +12,7 @@
+  * snd-usb-audio quirk.
+  *
+  * babyfacepro.c holds the card lifecycle, the PCM stream and the
+- * mixer-state persistence across re-probes;
++ * mixer-state persistence across re-probes and resume;
+  * babyfacepro-ctl.c holds the ALSA control surface - the hardware
+  * mixer.
+  *
+@@ -386,7 +386,7 @@ void babyface_pcm_stop_both(struct snd_usb_babyface *chip, snd_pcm_state_t state
+ void babyface_stream_work(struct work_struct *work);
+ extern const struct snd_pcm_hw_constraint_list bf_rates_constraint;
+ 
+-/* Mixer-state persistence across interface re-probes. */
++/* Mixer-state persistence across interface re-probes/resume. */
+ int babyface_restore_state(struct snd_usb_babyface *chip);
+ int bf_state_apply_flags(struct snd_usb_babyface *chip);
+ 
+-- 
+2.56.0
+
