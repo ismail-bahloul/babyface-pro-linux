@@ -1,6 +1,6 @@
-From 58e89b317715693935b34d7ece90099eb6943c4a Mon Sep 17 00:00:00 2001
+From 9321075e57d892cc3bc2b960490bff66a77905a3 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Fri, 23 Oct 2026 11:37:10 +0200
+Date: Tue, 27 Oct 2026 11:13:18 +0100
 Subject: [PATCH v7 1/8] ALSA: usb: add RME Babyface Pro driver core (probe,
  PCM stream)
 MIME-Version: 1.0
@@ -79,9 +79,9 @@ Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
  sound/usb/Kconfig                   |   17 +
  sound/usb/Makefile                  |    2 +-
  sound/usb/babyfacepro/Makefile      |    4 +
- sound/usb/babyfacepro/babyfacepro.c | 1506 +++++++++++++++++++++++++++
+ sound/usb/babyfacepro/babyfacepro.c | 1530 +++++++++++++++++++++++++++
  sound/usb/babyfacepro/babyfacepro.h |  187 ++++
- 6 files changed, 1721 insertions(+), 1 deletion(-)
+ 6 files changed, 1745 insertions(+), 1 deletion(-)
  create mode 100644 sound/usb/babyfacepro/Makefile
  create mode 100644 sound/usb/babyfacepro/babyfacepro.c
  create mode 100644 sound/usb/babyfacepro/babyfacepro.h
@@ -154,10 +154,10 @@ index 000000000..5adc6d474
 +obj-$(CONFIG_SND_USB_BABYFACE_PRO) += snd-usb-babyface-pro.o
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
 new file mode 100644
-index 000000000..cc1d57c16
+index 000000000..81a371462
 --- /dev/null
 +++ b/sound/usb/babyfacepro/babyfacepro.c
-@@ -0,0 +1,1506 @@
+@@ -0,0 +1,1530 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * RME Babyface Pro / Pro FS - proprietary-mode USB audio driver
@@ -900,6 +900,27 @@ index 000000000..cc1d57c16
 +	return chip->urb_frames * DIV_ROUND_UP(chip->urbs_active, 2);
 +}
 +
++static int urb_split;
++
++/* Does this session split its period into two URBs?  Then the queue is
++ * three URBs, one and a half periods, instead of four URBs, two periods:
++ * the round trip is half a period shorter for each of playback and
++ * capture's share of it (64 frames at a 128 period, 128 at 256).  Auto
++ * does it for the periods that were soaked for 10 minutes without an
++ * xrun (128 and 256 frames at 48 kHz, 12 channels, mmap, real-time
++ * priority), and for other rates only while a URB lasts at least 1.33 ms,
++ * the length of those.  Below that the URB is already near its floor.
++ */
++static bool bf_split_period(const struct bf_rate *r, unsigned int period)
++{
++	if (urb_split == 1)
++		return false;
++	if (urb_split > 1)
++		return true;
++	return period >= 128 && period <= 256 &&
++	       (period / 2) * 750 >= r->rate;
++}
++
 +/* The URB size for a session, chosen from the period the application
 + * asked for, as snd-usb-audio sizes its playback URBs: split the period
 + * into the fewest URBs of at most frames_per_urb, and make each a whole
@@ -921,6 +942,8 @@ index 000000000..cc1d57c16
 +	if (!hi || lo > hi || period < pkt)
 +		return 0;
 +	urb = rounddown(period / DIV_ROUND_UP(period, hi), pkt);
++	if (bf_split_period(r, period))
++		urb = rounddown(urb / 2, pkt);
 +	urb = clamp(urb, lo, hi);
 +	return urb <= period ? urb : 0;
 +}
@@ -1178,9 +1201,10 @@ index 000000000..cc1d57c16
 +		 * whole URBs, see bf_session_period()), so neither direction
 +		 * gets more queued than its own buffer.
 +		 */
-+		n = clamp_t(unsigned int,
-+			    2 * (params_period_size(params) / urb),
-+			    2, chip->nurbs);
++		n = 2 * (params_period_size(params) / urb);
++		if (bf_split_period(r, params_period_size(params)))
++			n--;
++		n = clamp_t(unsigned int, n, 2, chip->nurbs);
 +		if (urb != chip->urb_frames || n != chip->urbs_active) {
 +			/* This application's other direction may still
 +			 * run: stop it with an xrun, prepare() refuses it

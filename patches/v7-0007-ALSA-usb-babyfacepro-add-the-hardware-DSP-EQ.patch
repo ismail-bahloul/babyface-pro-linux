@@ -1,6 +1,6 @@
-From 74d746cbedad73a65e8a0e43605d2b5e76182fd1 Mon Sep 17 00:00:00 2001
+From 13758aea0825b177efde690b7a511e4d8c63e14a Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Fri, 23 Oct 2026 11:37:13 +0200
+Date: Tue, 27 Oct 2026 11:13:22 +0100
 Subject: [PATCH v7 7/8] ALSA: usb: babyfacepro: add the hardware DSP EQ
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -24,13 +24,13 @@ wrong for this file's signed Q27 math, and 'ang' is the CORDIC angle.
 
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---
- sound/usb/babyfacepro/babyfacepro-ctl.c | 590 +++++++++++++++++++++++-
- sound/usb/babyfacepro/babyfacepro.c     |  26 ++
+ sound/usb/babyfacepro/babyfacepro-ctl.c | 604 +++++++++++++++++++++++-
+ sound/usb/babyfacepro/babyfacepro.c     |  26 +
  sound/usb/babyfacepro/babyfacepro.h     |  25 +-
- 3 files changed, 639 insertions(+), 2 deletions(-)
+ 3 files changed, 653 insertions(+), 2 deletions(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index 947d4dcdd..217d99827 100644
+index cf41093dc..0606bcc60 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
 @@ -4,7 +4,8 @@
@@ -43,7 +43,7 @@ index 947d4dcdd..217d99827 100644
   *
   * See babyfacepro.h for the shared device state and register map,
   * and babyfacepro.c for the core driver (protocol, PCM streaming,
-@@ -3361,3 +3362,590 @@ int babyface_create_panel(struct snd_usb_babyface *chip)
+@@ -3313,3 +3314,604 @@ int babyface_create_panel(struct snd_usb_babyface *chip)
  
  	return 0;
  }
@@ -112,7 +112,7 @@ index 947d4dcdd..217d99827 100644
 +		      s32 gain_x10, s32 fs)
 +{
 +	s64 f = freq_hz;
-+	s64 w0, c, s, alpha, A, sq;
++	s64 w0, c, s, u, su, cu, alpha, A, sq;
 +	s64 b0, b1, b2, a0, a1, a2;
 +	s64 pi = 0x1921FB54;	/* pi, Q27 */
 +	s64 hpi = 0xC90FDAA;	/* pi/2, Q27 */
@@ -157,7 +157,21 @@ index 947d4dcdd..217d99827 100644
 +	if (cflip)
 +		c = -c;
 +
-+	alpha = div64_s64(s * 100 + q100, 2 * (s64)q100);	/* sin(w0)/(2Q) */
++	/* alpha = sin(w0 / (2Q)), the way TotalMix computes it, not the
++	 * cookbook's sin(w0) / (2Q): the two agree where w0 is small and
++	 * part ways as it grows, which is the effective Q that shrinks above
++	 * a few kHz in the captures (tools/usbdump/eq_biquad.md).  Checked
++	 * for Q 0.7 to 5 up to 16 kHz.  The angle is held to pi/2: past it
++	 * sin() falls again, and towards pi it would make a vanishing alpha,
++	 * a resonance with its poles on the unit circle.  It only matters for
++	 * a low Q at a high frequency (below Q 1, w0 > pi.Q), where the band
++	 * is as wide as it gets.
++	 */
++	u = div64_s64(w0 * 100 + q100, 2 * (s64)q100);
++	if (u > hpi)
++		u = hpi;
++	bf_sincos(u, &su, &cu);
++	alpha = su;
 +	/* A = 10^(g/40), sqrt(A): g = gain_x10/10 dB */
 +	A = bf_exp2((s64)gain_x10 * 0x11021E);
 +	sq = bf_exp2((s64)gain_x10 * 0x8810F);
@@ -635,10 +649,10 @@ index 947d4dcdd..217d99827 100644
 +	return 0;
 +}
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index ec405810d..a662c8618 100644
+index a1aafebb2..a8212aae6 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
-@@ -1280,6 +1280,8 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
+@@ -1299,6 +1299,8 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
  		new_rate = true;
  		chip->alt = r->alt;
  		chip->frame_bytes = r->frame_bytes;
@@ -647,7 +661,7 @@ index ec405810d..a662c8618 100644
  		dev_dbg(&chip->dev->dev, "rate %u Hz (alt %u)\n",
  			chip->rate, chip->alt);
  	}
-@@ -1674,6 +1676,8 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1696,6 +1698,8 @@ static int babyface_probe(struct usb_interface *intf,
  	else
  		chip->preamp = st[0];
  
@@ -656,7 +670,7 @@ index ec405810d..a662c8618 100644
  	/* The 0x16 clear zeroed the mixer registers: apply the factory
  	 * default routing to keep the outputs live out of the box.  alsactl
  	 * restores the user's settings once the card is registered.
-@@ -1691,6 +1695,7 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1713,6 +1717,7 @@ static int babyface_probe(struct usb_interface *intf,
  		dev_err(&intf->dev, "flag restore failed: %d\n", err);
  		goto error;
  	}
@@ -664,7 +678,7 @@ index ec405810d..a662c8618 100644
  	/* Keep the allocation size independent of the active USB mode. */
  	urbsize = BF_WORDS_PER_FRAME * sizeof(u32) * chip->frames_per_urb;
  	chip->urbs_in = kcalloc(chip->nurbs, sizeof(*chip->urbs_in), GFP_KERNEL);
-@@ -1771,6 +1776,20 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1793,6 +1798,20 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -685,7 +699,7 @@ index ec405810d..a662c8618 100644
  	err = snd_card_register(chip->card);
  	if (err < 0) {
  		dev_err(&intf->dev, "snd_card_register failed: %d\n", err);
-@@ -1898,6 +1917,13 @@ static int babyface_resume(struct usb_interface *intf)
+@@ -1920,6 +1939,13 @@ static int babyface_resume(struct usb_interface *intf)
  	if (err < 0)
  		goto out;
  	err = bf_state_apply_flags(chip);
@@ -700,7 +714,7 @@ index ec405810d..a662c8618 100644
  	mutex_unlock(&chip->mutex);
  	if (!err)
 diff --git a/sound/usb/babyfacepro/babyfacepro.h b/sound/usb/babyfacepro/babyfacepro.h
-index b594e8b4a..b546c86f8 100644
+index c4117e55f..41c1e7d10 100644
 --- a/sound/usb/babyfacepro/babyfacepro.h
 +++ b/sound/usb/babyfacepro/babyfacepro.h
 @@ -14,7 +14,7 @@
@@ -712,7 +726,7 @@ index b594e8b4a..b546c86f8 100644
   *
   * The protocol (vendor requests + 14x32-bit frame layout) was
   * reverse-engineered from Windows captures and validated on hardware -
-@@ -306,6 +306,21 @@ extern const u8 bf_xpoint_block[6];
+@@ -313,6 +313,21 @@ extern const struct bf_source bf_sources[14];
   */
  #define BF_SRC_PB1			8
  
@@ -734,7 +748,7 @@ index b594e8b4a..b546c86f8 100644
  struct snd_usb_babyface {
  	struct snd_card *card;
  	struct usb_device *dev;
-@@ -472,6 +487,9 @@ struct snd_usb_babyface {
+@@ -479,6 +494,9 @@ struct snd_usb_babyface {
  	struct snd_kcontrol *panel_select_kctl[3]; /* per IN pair, likewise */
  	struct snd_kcontrol *dim_press_kctl;
  	u32 dim_press_count;		/* front-panel DIM presses, wraps */
@@ -744,7 +758,7 @@ index b594e8b4a..b546c86f8 100644
  };
  
  struct bf_rate {
-@@ -528,6 +546,11 @@ int babyface_create_panel(struct snd_usb_babyface *chip);
+@@ -535,6 +553,11 @@ int babyface_create_panel(struct snd_usb_babyface *chip);
  void babyface_panel_start(struct snd_usb_babyface *chip);
  void babyface_panel_stop(struct snd_usb_babyface *chip);
  void babyface_panel_work(struct work_struct *work);

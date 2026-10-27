@@ -1,6 +1,6 @@
-From 0f442bcf53112ecd6623c8c571189f0c42d67bf8 Mon Sep 17 00:00:00 2001
+From 98c5ebaa38e2963e60a9d3a97250b21959007385 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Fri, 23 Oct 2026 11:37:13 +0200
+Date: Tue, 27 Oct 2026 11:13:21 +0100
 Subject: [PATCH v7 6/8] ALSA: usb: babyfacepro: add the front-panel poll and
  controls
 MIME-Version: 1.0
@@ -61,13 +61,13 @@ Co-developed-by: David Fredman <davfre@gmail.com>
 Signed-off-by: David Fredman <davfre@gmail.com>
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---
- sound/usb/babyfacepro/babyfacepro-ctl.c | 1242 ++++++++++++++++++++++-
- sound/usb/babyfacepro/babyfacepro.c     |   81 +-
+ sound/usb/babyfacepro/babyfacepro-ctl.c | 1330 ++++++++++++++++++++++-
+ sound/usb/babyfacepro/babyfacepro.c     |   83 +-
  sound/usb/babyfacepro/babyfacepro.h     |  125 ++-
- 3 files changed, 1441 insertions(+), 7 deletions(-)
+ 3 files changed, 1531 insertions(+), 7 deletions(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index eeb207994..947d4dcdd 100644
+index 39584ec71..cf41093dc 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
 @@ -3,7 +3,8 @@
@@ -80,7 +80,7 @@ index eeb207994..947d4dcdd 100644
   *
   * See babyfacepro.h for the shared device state and register map,
   * and babyfacepro.c for the core driver (protocol, PCM streaming,
-@@ -630,6 +631,7 @@ int babyface_create_xpoints(struct snd_usb_babyface *chip)
+@@ -611,6 +612,7 @@ int babyface_create_xpoints(struct snd_usb_babyface *chip)
  			err = snd_ctl_add(chip->card, kctl);
  			if (err < 0)
  				return err;
@@ -88,7 +88,91 @@ index eeb207994..947d4dcdd 100644
  		}
  	}
  
-@@ -1376,6 +1378,7 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
+@@ -834,6 +836,83 @@ static int bf_split_put(struct snd_kcontrol *kctl,
+ 	return ret;
+ }
+ 
++/* MIX-mode monitoring level (fader curve).
++ * Calibrated crosspoint-fader curve (AN1->AN1/2, cap_calib.pcap
++ * 2026-08-22; the same table as tuxmix-core/src/usb.rs FADER_CURVE).
++ * dB stored x2 (half-dB grid): the MIX wheel steps +/-0.5 dB per click
++ * on this curve (cap_mix.pcap).  0x0000 = -inf (digital mute),
++ * 0x0003 = -62 dB, ... 0x2D41 = +6 dB.  Raw values interpolate linearly
++ * between the 1-dB points.
++ */
++#define BF_FADER_DB2_INF	(-130)	/* -65 dB = the wheel's -inf floor */
++
++static const struct bf_fader_pt {
++	s16 db2;	/* dB x 2 */
++	u16 raw;
++} bf_fader_curve[] = {
++	{ -124, 0x0003 }, { -122, 0x0004 }, { -120, 0x0005 },
++	{ -118, 0x0006 }, { -116, 0x0007 }, { -114, 0x0008 },
++	{ -112, 0x0009 }, { -110, 0x000a }, { -108, 0x000b },
++	{ -106, 0x000d }, { -104, 0x000e }, { -102, 0x0010 },
++	{ -100, 0x0012 }, {  -98, 0x0014 }, {  -96, 0x0017 },
++	{  -94, 0x0019 }, {  -92, 0x001d }, {  -90, 0x0020 },
++	{  -88, 0x0024 }, {  -86, 0x0029 }, {  -84, 0x002e },
++	{  -82, 0x0033 }, {  -80, 0x003a }, {  -78, 0x0041 },
++	{  -76, 0x0049 }, {  -74, 0x0051 }, {  -72, 0x005b },
++	{  -70, 0x0067 }, {  -68, 0x0073 }, {  -66, 0x0081 },
++	{  -64, 0x0091 }, {  -62, 0x00a3 }, {  -60, 0x00b7 },
++	{  -58, 0x00cd }, {  -56, 0x00e6 }, {  -54, 0x0102 },
++	{  -52, 0x0122 }, {  -50, 0x0145 }, {  -48, 0x016d },
++	{  -46, 0x019a }, {  -44, 0x01cc }, {  -42, 0x0204 },
++	{  -40, 0x0243 }, {  -38, 0x028a }, {  -36, 0x02d9 },
++	{  -34, 0x0332 }, {  -32, 0x0396 }, {  -30, 0x0406 },
++	{  -28, 0x0483 }, {  -26, 0x0510 }, {  -24, 0x05af },
++	{  -22, 0x0660 }, {  -20, 0x0727 }, {  -18, 0x0807 },
++	{  -16, 0x0902 }, {  -14, 0x0a1b }, {  -12, 0x0b57 },
++	{  -10, 0x0cb9 }, {   -8, 0x0e47 }, {   -6, 0x1004 },
++	{   -4, 0x11f9 }, {   -2, 0x142a }, {    0, 0x16a0 },
++	{    2, 0x1963 }, {    4, 0x1c7c }, {    6, 0x1ff6 },
++	{    8, 0x23dc }, {   10, 0x283d }, {   12, 0x2d41 },
++};
++
++/* Fader raw -> dBx2 (linear interpolation; raw 0 = -inf). */
++static int bf_fader_raw_to_db2(u16 raw)
++{
++	int i;
++
++	if (raw == 0 || raw < bf_fader_curve[0].raw)
++		return BF_FADER_DB2_INF;
++	for (i = 0; i < ARRAY_SIZE(bf_fader_curve) - 1; i++) {
++		if (raw <= bf_fader_curve[i + 1].raw) {
++			u32 num = (u32)(raw - bf_fader_curve[i].raw) *
++				  (u32)(bf_fader_curve[i + 1].db2 - bf_fader_curve[i].db2);
++			u32 den = bf_fader_curve[i + 1].raw - bf_fader_curve[i].raw;
++
++			return bf_fader_curve[i].db2 + (int)((num + den / 2) / den);
++		}
++	}
++	return bf_fader_curve[ARRAY_SIZE(bf_fader_curve) - 1].db2;
++}
++
++/* dBx2 -> fader raw (linear interpolation; below -62 dB = mute 0). */
++static u16 bf_fader_db2_to_raw(int db2)
++{
++	int i;
++
++	if (db2 <= bf_fader_curve[0].db2)
++		return db2 < bf_fader_curve[0].db2 ? 0 : bf_fader_curve[0].raw;
++	for (i = 0; i < ARRAY_SIZE(bf_fader_curve) - 1; i++) {
++		if (db2 <= bf_fader_curve[i + 1].db2) {
++			u32 num = (u32)(db2 - bf_fader_curve[i].db2) *
++				  (u32)(bf_fader_curve[i + 1].raw - bf_fader_curve[i].raw);
++			u32 den = bf_fader_curve[i + 1].db2 - bf_fader_curve[i].db2;
++
++			return bf_fader_curve[i].raw + (u16)((num + den / 2) / den);
++		}
++	}
++	return bf_fader_curve[ARRAY_SIZE(bf_fader_curve) - 1].raw;
++}
++
+ /* Input Trim (T button, AN1-4): PROTOCOL.md "Trim (T) write for the
+  * AN1/2 pair" (cap_trim2/3/4.pcap, hardware-verified) - the analog
+  * input's own gain-trim, applied through the crosspoint registers
+@@ -1240,6 +1319,7 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
  		err = snd_ctl_add(chip->card, kctl);
  		if (err < 0)
  			return err;
@@ -96,7 +180,7 @@ index eeb207994..947d4dcdd 100644
  	}
  
  	for (i = 0; i < 2; i++) {
-@@ -1422,6 +1425,7 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
+@@ -1286,6 +1366,7 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
  		err = snd_ctl_add(chip->card, kctl);
  		if (err < 0)
  			return err;
@@ -104,7 +188,7 @@ index eeb207994..947d4dcdd 100644
  	}
  	return 0;
  }
-@@ -2121,3 +2125,1239 @@ int babyface_create_flags(struct snd_usb_babyface *chip)
+@@ -1985,3 +2066,1250 @@ int babyface_create_flags(struct snd_usb_babyface *chip)
  
  	return 0;
  }
@@ -240,6 +324,26 @@ index eeb207994..947d4dcdd 100644
 +			      "front panel: the SELECT channel selection is not known (the unit keeps it, and the driver cannot read it), so SET and the wheel do nothing; press SELECT to see it, then set the \"Front Panel Selection\" control of the IN pair shown (index 0 = Ch 1/2) to match\n");
 +}
 +
++/* Canonical output pair of the OUT selection (enum 1 = Ch 1/2,
++ * 2 = Phones, 3 = Opt): AN1/2, PH3/4, AS1/2.  "Opt" is the first
++ * optical pair, and the optical format does not move it: with the port
++ * set to ADAT that pair is ADAT 1/2, with it set to S/PDIF it is the
++ * S/PDIF pair (bf_sources), the same output register either way.  The
++ * ADAT7/8 this used to point at was an assumption - PROTOCOL.md leaves
++ * the optical outputs unmeasured.
++ */
++static int bf_panel_out_pair(struct snd_usb_babyface *chip)
++{
++	switch (READ_ONCE(chip->panel_out)) {
++	case 2:
++		return 1;
++	case 3:
++		return 2;
++	default:
++		return 0;
++	}
++}
++
 +/* The kernel driver plays the TotalMix role for the MIX button (the
 + * standalone emulator is hardware-validated in tuxmix-core/src/panel.rs
 + * + usb.rs): one wheel click in fader mode = +/-0.5 dB on the SELECT-
@@ -251,13 +355,7 @@ index eeb207994..947d4dcdd 100644
 + */
 +static void bf_panel_mix_wheel(struct snd_usb_babyface *chip, int delta)
 +{
-+	/* Canonical output of the OUT selection (enum 1 = Ch1/2,
-+	 * 2 = Phones, 3 = Opt): AN1/2, PH3/4, ADAT7/8 (the optical
-+	 * output) respectively.
-+	 */
-+	int out = READ_ONCE(chip->panel_out) == 3 ? 5 :
-+		  READ_ONCE(chip->panel_out) == 2 ? 1 : 0;
-+	unsigned int blk = bf_xpoint_block[out];
++	int out = bf_panel_out_pair(chip);
 +	u8 targets[2];
 +	int n = 0;
 +	int db2;
@@ -293,10 +391,10 @@ index eeb207994..947d4dcdd 100644
 +		flag = bf_flag_cycle[chip->flag_cnt];
 +		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 +		bf_vendor_write(chip, BF_REQ_CROSSPOINT, raw,
-+				(BF_REG_CROSS_BASE_L + BF_REG_CROSS_STRIDE * blk +
++				(BF_REG_XPOINT_BASE_L + BF_REG_XPOINT_STRIDE * out +
 +				 s->idx_l) | flag);
 +		bf_vendor_write(chip, BF_REQ_CROSSPOINT, raw,
-+				(BF_REG_CROSS_BASE_R + BF_REG_CROSS_STRIDE * blk +
++				(BF_REG_XPOINT_BASE_R + BF_REG_XPOINT_STRIDE * out +
 +				 s->idx_r) | flag);
 +		chip->xpoint[out][targets[i]][0] = raw;
 +		chip->xpoint[out][targets[i]][1] = raw;
@@ -384,7 +482,7 @@ index eeb207994..947d4dcdd 100644
 + * level.  A muted output ignores the wheel (see bf_panel_remute()).
 + * Both sides move by the louder side's step, so a balance (hold-SELECT)
 + * is kept.  Same output mapping as the MIX wheel (Phones = canon 1,
-+ * Opt = ADAT7/8 = canon 5, else AN1/2).
++ * Opt = canon 2, else AN1/2).
 + */
 +static void bf_panel_out_wheel_write(struct snd_usb_babyface *chip, int out,
 +				     u16 l, u16 r)
@@ -501,8 +599,7 @@ index eeb207994..947d4dcdd 100644
 +
 +static void bf_panel_out_wheel(struct snd_usb_babyface *chip, int delta)
 +{
-+	int out = READ_ONCE(chip->panel_out) == 3 ? 5 :
-+		  READ_ONCE(chip->panel_out) == 2 ? 1 : 0;
++	int out = bf_panel_out_pair(chip);
 +	int dir = delta > 0 ? 1 : -1;
 +	int clicks = abs(delta);
 +	ktime_t now = ktime_get();
@@ -663,8 +760,7 @@ index eeb207994..947d4dcdd 100644
 + */
 +static void bf_panel_balance_wheel(struct snd_usb_babyface *chip, int delta)
 +{
-+	int out = READ_ONCE(chip->panel_out) == 3 ? 5 :
-+		  READ_ONCE(chip->panel_out) == 2 ? 1 : 0;
++	int out = bf_panel_out_pair(chip);
 +	int db[2], ch, i, louder, bal, lim;
 +
 +	mutex_lock(&chip->mutex);
@@ -963,8 +1059,7 @@ index eeb207994..947d4dcdd 100644
 +			 * the first SELECT-chosen channel of the IN pair;
 +			 * Opt = the AS1/2 pair).
 +			 */
-+			out = READ_ONCE(chip->panel_out) == 3 ? 5 :
-+			      READ_ONCE(chip->panel_out) == 2 ? 1 : 0;
++			out = bf_panel_out_pair(chip);
 +			ref = READ_ONCE(chip->panel_in) == 3 ? 4 :
 +			      (READ_ONCE(chip->panel_in) == 2 ? 2 : 0) +
 +			      (READ_ONCE(chip->panel_select) == 1 ? 1 : 0);
@@ -1345,7 +1440,7 @@ index eeb207994..947d4dcdd 100644
 +	return 0;
 +}
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index a21f7fe78..ec405810d 100644
+index e0eb0ce9b..a1aafebb2 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
 @@ -276,6 +276,53 @@ int bf_cold_init(struct snd_usb_babyface *chip)
@@ -1402,7 +1497,7 @@ index a21f7fe78..ec405810d 100644
  /* Re-apply the whole cached mixer state after a resume (the device
   * lost its registers across a system suspend - TotalMix does the same
   * re-apply).  Caller holds chip->mutex.
-@@ -1450,6 +1497,7 @@ static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
+@@ -1470,6 +1517,7 @@ static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
  static int frames_per_urb = BF_FRAMES_PER_URB_DEFAULT;
  static int urb_frames_min = 32;
  static int nurbs = BF_NURBS_DEFAULT;
@@ -1410,8 +1505,12 @@ index a21f7fe78..ec405810d 100644
  
  module_param_array(index, int, NULL, 0444);
  MODULE_PARM_DESC(index, "Index value for the Babyface Pro sound card.");
-@@ -1461,6 +1509,8 @@ module_param(urb_frames_min, int, 0444);
+@@ -1479,8 +1527,12 @@ module_param(frames_per_urb, int, 0444);
+ MODULE_PARM_DESC(frames_per_urb, "Largest URB in audio frames, 8..1024 (256 = default); the period chooses the size below it.");
+ module_param(urb_frames_min, int, 0444);
  MODULE_PARM_DESC(urb_frames_min, "Smallest URB in audio frames, 8..1024 (32 = default, 16 = low-latency floor).");
++module_param(urb_split, int, 0444);
++MODULE_PARM_DESC(urb_split, "Split the period into two URBs, queueing 1.5 periods instead of 2: 0 = auto (default), 1 = never, 2 = always.");
  module_param(nurbs, int, 0444);
  MODULE_PARM_DESC(nurbs, "Most URBs in flight per direction, 2..16 (8 = default).");
 +module_param(panel_poll_ms, int, 0444);
@@ -1419,7 +1518,7 @@ index a21f7fe78..ec405810d 100644
  
  static void babyface_private_free(struct snd_card *card)
  {
-@@ -1537,11 +1587,12 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1557,11 +1609,12 @@ static int babyface_probe(struct usb_interface *intf,
  	chip->dev = usb_get_dev(dev);
  	/* USB autosuspend is untested: babyface_suspend()/_resume() don't
  	 * check PMSG_IS_AUTO, and nothing in this driver holds a PM
@@ -1437,7 +1536,7 @@ index a21f7fe78..ec405810d 100644
  	 */
  	usb_disable_autosuspend(chip->dev);
  	chip->iface = intf;
-@@ -1556,10 +1607,13 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1576,10 +1629,13 @@ static int babyface_probe(struct usb_interface *intf,
  	chip->alt = BF_ALT_1;
  	chip->frame_bytes = 56;
  	chip->preamp = BF_PREAMP_BASE;
@@ -1451,7 +1550,7 @@ index a21f7fe78..ec405810d 100644
  	chip->card->private_free = babyface_private_free;
  
  	/* Model-neutral on purpose.  The FS and the original (2015)
-@@ -1711,12 +1765,24 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1731,12 +1787,24 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -1476,7 +1575,7 @@ index a21f7fe78..ec405810d 100644
  	usb_set_intfdata(intf, chip);
  	dev_info(&intf->dev,
  		 "Babyface Pro: card %i, %u frames/URB, %u URBs/direction\n",
-@@ -1759,6 +1825,7 @@ static void babyface_disconnect(struct usb_interface *intf)
+@@ -1779,6 +1847,7 @@ static void babyface_disconnect(struct usb_interface *intf)
  		babyface_stream_kill(chip);
  	mutex_unlock(&chip->mutex);
  	cancel_work_sync(&chip->stream_work);
@@ -1484,7 +1583,7 @@ index a21f7fe78..ec405810d 100644
  	/* Balance the probe()-time usb_disable_autosuspend(): the usb_device
  	 * outlives this interface claim (a usbfs detach re-probes without
  	 * the physical device ever disconnecting), so leaving autosuspend
-@@ -1796,6 +1863,7 @@ static int babyface_suspend(struct usb_interface *intf, pm_message_t message)
+@@ -1816,6 +1885,7 @@ static int babyface_suspend(struct usb_interface *intf, pm_message_t message)
  		babyface_stream_kill(chip);
  	mutex_unlock(&chip->mutex);
  	cancel_work_sync(&chip->stream_work);
@@ -1492,7 +1591,7 @@ index a21f7fe78..ec405810d 100644
  	return 0;
  }
  
-@@ -1832,6 +1900,8 @@ static int babyface_resume(struct usb_interface *intf)
+@@ -1852,6 +1922,8 @@ static int babyface_resume(struct usb_interface *intf)
  	err = bf_state_apply_flags(chip);
  out:
  	mutex_unlock(&chip->mutex);
@@ -1501,7 +1600,7 @@ index a21f7fe78..ec405810d 100644
  	return err;
  }
  
-@@ -1859,6 +1929,7 @@ static int __init babyface_init(void)
+@@ -1879,6 +1951,7 @@ static int __init babyface_init(void)
  static void __exit babyface_exit(void)
  {
  	usb_deregister(&babyface_driver);
@@ -1510,7 +1609,7 @@ index a21f7fe78..ec405810d 100644
  
  module_init(babyface_init);
 diff --git a/sound/usb/babyfacepro/babyfacepro.h b/sound/usb/babyfacepro/babyfacepro.h
-index c2beb1235..b594e8b4a 100644
+index 259f7d3a0..c4117e55f 100644
 --- a/sound/usb/babyfacepro/babyfacepro.h
 +++ b/sound/usb/babyfacepro/babyfacepro.h
 @@ -14,7 +14,7 @@
@@ -1530,7 +1629,7 @@ index c2beb1235..b594e8b4a 100644
  #include <linux/module.h>
  #include <linux/mutex.h>
  #include <linux/unaligned.h>
-@@ -191,6 +192,53 @@
+@@ -199,6 +200,53 @@
   */
  #define BF_LOOPBACK_CHANNELS		30
  
@@ -1584,7 +1683,7 @@ index c2beb1235..b594e8b4a 100644
  /* The "cross" register block within each output: the L-registers sit at
   * odd offsets 5..23 and the R-registers at even offsets 4..22 (the stereo
   * source pairs that can be cross-linked).  bf_crosspoint_clear_cross()
-@@ -311,6 +359,12 @@ struct snd_usb_babyface {
+@@ -318,6 +366,12 @@ struct snd_usb_babyface {
  	u16 master[6][2];		/* cached masters, in BF_MASTER_STEP_* */
  	bool muted[6];
  	u16 xpoint[6][14][2];		/* cached crosspoints (out, src, L/R) */
@@ -1597,7 +1696,7 @@ index c2beb1235..b594e8b4a 100644
  	u16 preamp;			/* 48V/PAD bits, base 0x0c */
  	u8 gain[4];			/* preamp gain in dB 0-65/9 (raw derived
  					 * at write: mic packed coarse/fine,
-@@ -353,6 +407,71 @@ struct snd_usb_babyface {
+@@ -360,6 +414,71 @@ struct snd_usb_babyface {
  	u16 dim_saved[2];		/* pre-DIM Phones master (out 1 L/R) */
  	bool dim;			/* DIM engaged (fixed -20 dB on Phones) */
  	struct snd_kcontrol *dim_kctl;      /* for snd_ctl_notify */
@@ -1669,7 +1768,7 @@ index c2beb1235..b594e8b4a 100644
  };
  
  struct bf_rate {
-@@ -405,6 +524,10 @@ int bf_gain_db(int mic, u8 raw);
+@@ -412,6 +531,10 @@ int bf_gain_db(int mic, u8 raw);
  u8 bf_gain_raw(int mic, int db);
  int bf_loopback_write_map(struct snd_usb_babyface *chip, int out, bool on);
  int babyface_create_flags(struct snd_usb_babyface *chip);

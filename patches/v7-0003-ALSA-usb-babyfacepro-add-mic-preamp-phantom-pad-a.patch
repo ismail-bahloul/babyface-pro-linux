@@ -1,6 +1,6 @@
-From e29d2167798a3c41429dfd5bf955d573334f638d Mon Sep 17 00:00:00 2001
+From 04beae1bb9b2a5da0ce299811ec62e25e39b7a3d Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Fri, 23 Oct 2026 11:37:11 +0200
+Date: Tue, 27 Oct 2026 11:13:19 +0100
 Subject: [PATCH v7 3/8] ALSA: usb: babyfacepro: add mic preamp, phantom/pad
  and input trim
 MIME-Version: 1.0
@@ -24,16 +24,16 @@ Co-developed-by: David Fredman <davfre@gmail.com>
 Signed-off-by: David Fredman <davfre@gmail.com>
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---
- sound/usb/babyfacepro/babyfacepro-ctl.c | 743 ++++++++++++++++++++++++
+ sound/usb/babyfacepro/babyfacepro-ctl.c | 626 ++++++++++++++++++++++++
  sound/usb/babyfacepro/babyfacepro.c     | 101 +++-
  sound/usb/babyfacepro/babyfacepro.h     |  80 +++
- 3 files changed, 923 insertions(+), 1 deletion(-)
+ 3 files changed, 806 insertions(+), 1 deletion(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index a0900baca..a67554d39 100644
+index 9b41dcde5..60604242b 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
-@@ -673,3 +673,746 @@ int babyface_create_masters(struct snd_usb_babyface *chip)
+@@ -654,3 +654,629 @@ int babyface_create_masters(struct snd_usb_babyface *chip)
  
  	return 0;
  }
@@ -86,25 +86,23 @@ index a0900baca..a67554d39 100644
 +	u16 flag;
 +
 +	for (out = 0; out < 6; out++) {
-+		unsigned int blk = bf_xpoint_block[out];
 +		u16 plain = chip->xpoint[out][mic][0];
 +		u16 value = invert ? (u16)~plain : plain;
 +
-+		flag = bf_flag_cycle[chip->flag_cnt];
-+		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
++		/* The AN1/2 block is written without the rotating bits, as
++		 * bf_xpoint_write() does.
++		 */
++		flag = 0;
++		if (out) {
++			flag = bf_flag_cycle[chip->flag_cnt];
++			chip->flag_cnt = (chip->flag_cnt + 1) & 3;
++		}
 +		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, value,
-+				      (BF_REG_CROSS_BASE_L +
-+				       BF_REG_CROSS_STRIDE * blk + s->idx_l) |
++				      (BF_REG_XPOINT_BASE_L +
++				       BF_REG_XPOINT_STRIDE * out + s->idx_l) |
 +				      flag);
 +		if (ret < 0)
 +			return ret;
-+
-+		if (out == 0) {
-+			ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, value,
-+					      s->idx_l);
-+			if (ret < 0)
-+				return ret;
-+		}
 +	}
 +	return 0;
 +}
@@ -156,35 +154,27 @@ index a0900baca..a67554d39 100644
 + * stereo pair (L=R=0x1000, -6 dB each side) - fixed constants, not
 + * derived from the current fader value (unlike Phase, there's nothing
 + * to preserve), matching TuxMix's own `usb.rs::set_stereo_split`
-+ * exactly. Only reaches the AN1/2 destination (low map + that output's
-+ * standard crosspoint block) - same scope as CUE/mute/solo's own
-+ * low-map-only reach. `chip->xpoint[][]` is deliberately left
-+ * untouched, same reasoning as Phase.
++ * exactly. Only reaches the AN1/2 destination (its block of the map),
++ * the same scope as CUE/mute/solo. `chip->xpoint[][]` is deliberately
++ * left untouched, same reasoning as Phase.
 + */
 +int bf_split_apply(struct snd_usb_babyface *chip, int pb, bool split)
 +{
 +	const struct bf_source *s = &bf_sources[8 + pb];
-+	unsigned int blk = bf_xpoint_block[0]; /* AN1/2 output */
 +	u16 l = split ? 0x2000 : 0x1000;
 +	u16 r = split ? 0x0000 : 0x1000;
 +	int ret;
 +
++	/* The AN1/2 block.  The same values also went to a "standard map"
++	 * half at 0x0068, which is AS1/2's submix, not part of AN1/2: it
++	 * overwrote AS1/2's own crosspoint for this playback pair.
++	 */
 +	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l,
-+			      BF_REG_LOWMAP_BASE_L + s->idx_l);
-+	if (ret < 0)
-+		return ret;
-+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r,
-+			      BF_REG_LOWMAP_BASE_R + s->idx_r);
-+	if (ret < 0)
-+		return ret;
-+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l,
-+			      (BF_REG_CROSS_BASE_L + BF_REG_CROSS_STRIDE * blk +
-+			       s->idx_l));
++			      BF_REG_XPOINT_BASE_L + s->idx_l);
 +	if (ret < 0)
 +		return ret;
 +	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, r,
-+			       (BF_REG_CROSS_BASE_R + BF_REG_CROSS_STRIDE * blk +
-+				s->idx_r));
++			       BF_REG_XPOINT_BASE_R + s->idx_r);
 +}
 +
 +static int bf_split_get(struct snd_kcontrol *kctl,
@@ -218,98 +208,24 @@ index a0900baca..a67554d39 100644
 +	return ret;
 +}
 +
-+/* MIX-mode monitoring level (fader curve).
-+ * Calibrated crosspoint-fader curve (AN1->AN1/2, cap_calib.pcap
-+ * 2026-08-22; the same table as tuxmix-core/src/usb.rs FADER_CURVE).
-+ * dB stored x2 (half-dB grid): the MIX wheel steps +/-0.5 dB per click
-+ * on this curve (cap_mix.pcap).  0x0000 = -inf (digital mute),
-+ * 0x0003 = -62 dB, ... 0x2D41 = +6 dB.  Raw values interpolate linearly
-+ * between the 1-dB points.
-+ */
-+#define BF_FADER_DB2_INF	(-130)	/* -65 dB = the wheel's -inf floor */
-+
-+static const struct bf_fader_pt {
-+	s16 db2;	/* dB x 2 */
-+	u16 raw;
-+} bf_fader_curve[] = {
-+	{ -124, 0x0003 }, { -122, 0x0004 }, { -120, 0x0005 },
-+	{ -118, 0x0006 }, { -116, 0x0007 }, { -114, 0x0008 },
-+	{ -112, 0x0009 }, { -110, 0x000a }, { -108, 0x000b },
-+	{ -106, 0x000d }, { -104, 0x000e }, { -102, 0x0010 },
-+	{ -100, 0x0012 }, {  -98, 0x0014 }, {  -96, 0x0017 },
-+	{  -94, 0x0019 }, {  -92, 0x001d }, {  -90, 0x0020 },
-+	{  -88, 0x0024 }, {  -86, 0x0029 }, {  -84, 0x002e },
-+	{  -82, 0x0033 }, {  -80, 0x003a }, {  -78, 0x0041 },
-+	{  -76, 0x0049 }, {  -74, 0x0051 }, {  -72, 0x005b },
-+	{  -70, 0x0067 }, {  -68, 0x0073 }, {  -66, 0x0081 },
-+	{  -64, 0x0091 }, {  -62, 0x00a3 }, {  -60, 0x00b7 },
-+	{  -58, 0x00cd }, {  -56, 0x00e6 }, {  -54, 0x0102 },
-+	{  -52, 0x0122 }, {  -50, 0x0145 }, {  -48, 0x016d },
-+	{  -46, 0x019a }, {  -44, 0x01cc }, {  -42, 0x0204 },
-+	{  -40, 0x0243 }, {  -38, 0x028a }, {  -36, 0x02d9 },
-+	{  -34, 0x0332 }, {  -32, 0x0396 }, {  -30, 0x0406 },
-+	{  -28, 0x0483 }, {  -26, 0x0510 }, {  -24, 0x05af },
-+	{  -22, 0x0660 }, {  -20, 0x0727 }, {  -18, 0x0807 },
-+	{  -16, 0x0902 }, {  -14, 0x0a1b }, {  -12, 0x0b57 },
-+	{  -10, 0x0cb9 }, {   -8, 0x0e47 }, {   -6, 0x1004 },
-+	{   -4, 0x11f9 }, {   -2, 0x142a }, {    0, 0x16a0 },
-+	{    2, 0x1963 }, {    4, 0x1c7c }, {    6, 0x1ff6 },
-+	{    8, 0x23dc }, {   10, 0x283d }, {   12, 0x2d41 },
-+};
-+
-+/* Fader raw -> dBx2 (linear interpolation; raw 0 = -inf). */
-+static int bf_fader_raw_to_db2(u16 raw)
-+{
-+	int i;
-+
-+	if (raw == 0 || raw < bf_fader_curve[0].raw)
-+		return BF_FADER_DB2_INF;
-+	for (i = 0; i < ARRAY_SIZE(bf_fader_curve) - 1; i++) {
-+		if (raw <= bf_fader_curve[i + 1].raw) {
-+			u32 num = (u32)(raw - bf_fader_curve[i].raw) *
-+				  (u32)(bf_fader_curve[i + 1].db2 - bf_fader_curve[i].db2);
-+			u32 den = bf_fader_curve[i + 1].raw - bf_fader_curve[i].raw;
-+
-+			return bf_fader_curve[i].db2 + (int)((num + den / 2) / den);
-+		}
-+	}
-+	return bf_fader_curve[ARRAY_SIZE(bf_fader_curve) - 1].db2;
-+}
-+
-+/* dBx2 -> fader raw (linear interpolation; below -62 dB = mute 0). */
-+static u16 bf_fader_db2_to_raw(int db2)
-+{
-+	int i;
-+
-+	if (db2 <= bf_fader_curve[0].db2)
-+		return db2 < bf_fader_curve[0].db2 ? 0 : bf_fader_curve[0].raw;
-+	for (i = 0; i < ARRAY_SIZE(bf_fader_curve) - 1; i++) {
-+		if (db2 <= bf_fader_curve[i + 1].db2) {
-+			u32 num = (u32)(db2 - bf_fader_curve[i].db2) *
-+				  (u32)(bf_fader_curve[i + 1].raw - bf_fader_curve[i].raw);
-+			u32 den = bf_fader_curve[i + 1].db2 - bf_fader_curve[i].db2;
-+
-+			return bf_fader_curve[i].raw + (u16)((num + den / 2) / den);
-+		}
-+	}
-+	return bf_fader_curve[ARRAY_SIZE(bf_fader_curve) - 1].raw;
-+}
-+
 +/* Input Trim (T button, AN1-4): PROTOCOL.md "Trim (T) write for the
 + * AN1/2 pair" (cap_trim2/3/4.pcap, hardware-verified) - the analog
 + * input's own gain-trim, applied through the crosspoint registers
-+ * exactly like a fader (there is no separate trim register). Two
-+ * different curves combine: the low map holds the trim ALONE on the
-+ * MASTER curve (0x2000 = 0 dB, `bf_master_16bit`); the standard map
-+ * holds fader+trim SUMMED on the FADER curve (`bf_fader_db2_to_raw`).
-+ * Always writes all 8 registers for the pair (both AN1+AN2 or both
-+ * AN3+AN4, matching the vendor software's linked-strip behaviour);
-+ * `mic` may be either channel of the pair, and the base is derived
-+ * (`mic & ~1`) so the write always lands on the correct pair's
-+ * registers regardless of which channel's control triggered it.
-+ * Destination is always the AN1/2 monitor bus, the same scope the
-+ * MS-processor and CUE writes have, and the same one the vendor
-+ * software's Trim reaches.
++ * exactly like a fader (there is no separate trim register).  It
++ * writes the trim alone on the MASTER curve (0x2000 = 0 dB,
++ * `bf_master_16bit`) into the AN1/2 block, all 4 registers of the pair
++ * (both AN1+AN2 or both AN3+AN4, matching the vendor software's
++ * linked-strip behaviour); `mic` may be either channel of the pair, and
++ * the base is derived (`mic & ~1`) so the write always lands on the
++ * correct pair's registers regardless of which channel's control
++ * triggered it.  Destination is always the AN1/2 monitor bus, the same
++ * scope the MS-processor and CUE writes have, and the same one the
++ * vendor software's Trim reaches.
++ *
++ * It also wrote the fader and the trim summed, on the fader curve, to a
++ * "standard map" at 0x0068.  That block is AS1/2's submix (see
++ * bf_xpoint_write), so those writes never reached AN1/2: they only
++ * overwrote AS1/2's own crosspoints for these inputs, and are gone.
 + *
 + * Trim is a genuinely SHARED value per pair on real hardware (one
 + * write always touches both channels' registers) but is exposed as 2
@@ -319,16 +235,6 @@ index a0900baca..a67554d39 100644
 + * represent - and `bf_state_apply_flags`, which replays the pair from
 + * its even index, always replays the value that is actually on the
 + * wire.
-+ *
-+ * ONE KNOWN LIMITATION, kept rather than silently hidden:
-+ *    Same class as Phase (see `bf_phase_apply`'s own comment):
-+ *    `chip->xpoint[0][mic][0]` is read here for the CURRENT fader
-+ *    value but never written back - the standard-map register ends up
-+ *    holding fader+trim while the cache still holds the plain fader,
-+ *    so a later `bf_xpoint_put` on the same slot writes the plain
-+ *    value, silently dropping trim from the combined register until
-+ *    this is re-applied. Not fixed for the same reason Phase wasn't:
-+ *    touches the shared 84-crosspoint write path, out of scope here.
 + */
 +int bf_trim_apply(struct snd_usb_babyface *chip, int mic, int trim_db2)
 +{
@@ -336,10 +242,7 @@ index a0900baca..a67554d39 100644
 +	int sib = base + 1;
 +	const struct bf_source *sb = &bf_sources[base];
 +	const struct bf_source *ss = &bf_sources[sib];
-+	unsigned int blk = bf_xpoint_block[0]; /* AN1/2 output */
 +	u16 trim_raw = bf_master_16bit(trim_db2);
-+	int fader_db2 = bf_fader_raw_to_db2(chip->xpoint[0][base][0]);
-+	u16 standard_raw = bf_fader_db2_to_raw(fader_db2 + trim_db2);
 +	int ret;
 +
 +	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, trim_raw,
@@ -354,28 +257,8 @@ index a0900baca..a67554d39 100644
 +			      BF_REG_LOWMAP_BASE_L + ss->idx_l);
 +	if (ret < 0)
 +		return ret;
-+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, trim_raw,
-+			      BF_REG_LOWMAP_BASE_R + ss->idx_r);
-+	if (ret < 0)
-+		return ret;
-+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, standard_raw,
-+			      (BF_REG_CROSS_BASE_L + BF_REG_CROSS_STRIDE * blk +
-+			       sb->idx_l));
-+	if (ret < 0)
-+		return ret;
-+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, standard_raw,
-+			      (BF_REG_CROSS_BASE_R + BF_REG_CROSS_STRIDE * blk +
-+			       sb->idx_r));
-+	if (ret < 0)
-+		return ret;
-+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, standard_raw,
-+			      (BF_REG_CROSS_BASE_L + BF_REG_CROSS_STRIDE * blk +
-+			       ss->idx_l));
-+	if (ret < 0)
-+		return ret;
-+	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, standard_raw,
-+			       (BF_REG_CROSS_BASE_R + BF_REG_CROSS_STRIDE * blk +
-+				ss->idx_r));
++	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, trim_raw,
++			       BF_REG_LOWMAP_BASE_R + ss->idx_r);
 +}
 +
 +/* Trim's control value is dB as well, -65..+6. */
@@ -781,7 +664,7 @@ index a0900baca..a67554d39 100644
 +	return 0;
 +}
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index 9e4ef4d25..107e845db 100644
+index de1659307..c2835e2d6 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
 @@ -255,7 +255,21 @@ int bf_cold_init(struct snd_usb_babyface *chip)
@@ -807,7 +690,7 @@ index 9e4ef4d25..107e845db 100644
  
  	/* Masters (8-bit = the real volume) + mutes. */
  	ret = bf_apply_masters(chip);
-@@ -290,6 +304,68 @@ int babyface_restore_state(struct snd_usb_babyface *chip)
+@@ -286,6 +300,68 @@ int babyface_restore_state(struct snd_usb_babyface *chip)
  	return bf_pitch_write(chip, chip->pitch);
  }
  
@@ -876,7 +759,7 @@ index 9e4ef4d25..107e845db 100644
  /* Copy a saved state (if any) into a freshly probed chip and push it
   * to the device.  Returns 1 when restored, -ENOENT when there is none,
   * or a negative error from the vendor writes.
-@@ -1315,6 +1391,7 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1335,6 +1411,7 @@ static int babyface_probe(struct usb_interface *intf,
  	struct snd_card *card;
  	struct snd_pcm *pcm;
  	unsigned int urbsize;
@@ -884,7 +767,7 @@ index 9e4ef4d25..107e845db 100644
  	int i, err;
  
  	if (intf->cur_altsetting->desc.bInterfaceNumber != BF_IFACE) {
-@@ -1354,6 +1431,7 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1374,6 +1451,7 @@ static int babyface_probe(struct usb_interface *intf,
  	chip->rate = 48000;
  	chip->alt = BF_ALT_1;
  	chip->frame_bytes = 56;
@@ -892,7 +775,7 @@ index 9e4ef4d25..107e845db 100644
  	mutex_init(&chip->mutex);
  	spin_lock_init(&chip->lock);
  	atomic_set(&chip->urb_err, 0);
-@@ -1409,6 +1487,15 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1429,6 +1507,15 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -908,7 +791,7 @@ index 9e4ef4d25..107e845db 100644
  	/* The 0x16 clear zeroed the mixer registers: apply the factory
  	 * default routing to keep the outputs live out of the box.  alsactl
  	 * restores the user's settings once the card is registered.
-@@ -1474,6 +1561,18 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1494,6 +1581,18 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -928,7 +811,7 @@ index 9e4ef4d25..107e845db 100644
  	if (err < 0) {
  		dev_err(&intf->dev, "snd_card_register failed: %d\n", err);
 diff --git a/sound/usb/babyfacepro/babyfacepro.h b/sound/usb/babyfacepro/babyfacepro.h
-index c1ec684f9..ccf1cb043 100644
+index a3b118bed..156a8c7dd 100644
 --- a/sound/usb/babyfacepro/babyfacepro.h
 +++ b/sound/usb/babyfacepro/babyfacepro.h
 @@ -119,6 +119,45 @@
@@ -977,7 +860,7 @@ index c1ec684f9..ccf1cb043 100644
  /* Register addresses (masters + crosspoint matrix). */
  #define BF_REG_MASTER_16		0x03e0	/* + 2*out (bReq 0x12) */
  #define BF_REG_MASTER_8			0x0004	/* + 2*out (bReq 0x1a) */
-@@ -255,6 +294,37 @@ struct snd_usb_babyface {
+@@ -262,6 +301,37 @@ struct snd_usb_babyface {
  	u16 master[6][2];		/* cached masters, in BF_MASTER_STEP_* */
  	bool muted[6];
  	u16 xpoint[6][14][2];		/* cached crosspoints (out, src, L/R) */
@@ -1015,7 +898,7 @@ index c1ec684f9..ccf1cb043 100644
  };
  
  struct bf_rate {
-@@ -283,6 +353,7 @@ extern const struct snd_pcm_hw_constraint_list bf_rates_constraint;
+@@ -290,6 +360,7 @@ extern const struct snd_pcm_hw_constraint_list bf_rates_constraint;
  
  /* Mixer-state persistence across interface re-probes. */
  int babyface_restore_state(struct snd_usb_babyface *chip);
@@ -1023,7 +906,7 @@ index c1ec684f9..ccf1cb043 100644
  
  /* babyfacepro-ctl.c */
  extern const u16 bf_flag_cycle[4];
-@@ -295,6 +366,15 @@ int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
+@@ -302,6 +373,15 @@ int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
  		    u16 l, u16 r);
  int babyface_create_masters(struct snd_usb_babyface *chip);
  int babyface_create_xpoints(struct snd_usb_babyface *chip);

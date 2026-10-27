@@ -1,6 +1,6 @@
-From 2a3d410b4687332a4f48dc0678f59c33e76bc509 Mon Sep 17 00:00:00 2001
+From e2104a906f70c28dfa781833d6fe6b92c3a7f07a Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Fri, 23 Oct 2026 11:37:10 +0200
+Date: Tue, 27 Oct 2026 11:13:19 +0100
 Subject: [PATCH v7 2/8] ALSA: usb: babyfacepro: add output masters and
  crosspoint routing
 MIME-Version: 1.0
@@ -35,10 +35,10 @@ Signed-off-by: David Fredman <davfre@gmail.com>
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---
  sound/usb/babyfacepro/Makefile          |   2 +-
- sound/usb/babyfacepro/babyfacepro-ctl.c | 675 ++++++++++++++++++++++++
- sound/usb/babyfacepro/babyfacepro.c     |  68 ++-
- sound/usb/babyfacepro/babyfacepro.h     | 117 +++-
- 4 files changed, 859 insertions(+), 3 deletions(-)
+ sound/usb/babyfacepro/babyfacepro-ctl.c | 656 ++++++++++++++++++++++++
+ sound/usb/babyfacepro/babyfacepro.c     |  64 ++-
+ sound/usb/babyfacepro/babyfacepro.h     | 124 ++++-
+ 4 files changed, 843 insertions(+), 3 deletions(-)
  create mode 100644 sound/usb/babyfacepro/babyfacepro-ctl.c
 
 diff --git a/sound/usb/babyfacepro/Makefile b/sound/usb/babyfacepro/Makefile
@@ -53,10 +53,10 @@ index 5adc6d474..a50647a06 100644
  obj-$(CONFIG_SND_USB_BABYFACE_PRO) += snd-usb-babyface-pro.o
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
 new file mode 100644
-index 000000000..a0900baca
+index 000000000..9b41dcde5
 --- /dev/null
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
-@@ -0,0 +1,675 @@
+@@ -0,0 +1,656 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * RME Babyface Pro / Pro FS - proprietary-mode USB audio driver
@@ -110,21 +110,21 @@ index 000000000..a0900baca
 + * L-registers (5,7,...23) + 10 even R-registers (4,6,...22).
 + */
 +int bf_crosspoint_clear_cross(struct snd_usb_babyface *chip,
-+			      unsigned int blk)
++			      unsigned int pair)
 +{
 +	int ret, k;
 +
 +	for (k = BF_CROSS_L_FIRST; k <= BF_CROSS_L_LAST; k += 2) {
 +		ret = bf_vendor_write_cycle(chip, BF_REQ_CROSSPOINT, 0x0000,
-+					    BF_REG_CROSS_BASE_L +
-+					    BF_REG_CROSS_STRIDE * blk + k);
++					    BF_REG_XPOINT_BASE_L +
++					    BF_REG_XPOINT_STRIDE * pair + k);
 +		if (ret < 0)
 +			return ret;
 +	}
 +	for (k = BF_CROSS_R_FIRST; k <= BF_CROSS_R_LAST; k += 2) {
 +		ret = bf_vendor_write_cycle(chip, BF_REQ_CROSSPOINT, 0x0000,
-+					    BF_REG_CROSS_BASE_R +
-+					    BF_REG_CROSS_STRIDE * blk + k);
++					    BF_REG_XPOINT_BASE_R +
++					    BF_REG_XPOINT_STRIDE * pair + k);
 +		if (ret < 0)
 +			return ret;
 +	}
@@ -148,25 +148,19 @@ index 000000000..a0900baca
 +	{ "PB6",    22, 23 },
 +};
 +
-+/* Crosspoint-map output order vs the master-map order - HARDWARE-
-+ * VERIFIED 2026-08-24: the block that feeds the Phones is the FIRST
-+ * crosspoint block (0x34), while the Phones master is the SECOND
-+ * (0x03E2/0x0006).  The crosspoint map lists the Phones first (the
-+ * monitor output); the master map lists AN1/2 first.  Control index =
-+ * the canonical order (AN1/2=0, PH3/4=1, ...) so the crosspoint and
-+ * master controls line up; this table maps to the register block.
++/* The crosspoint blocks are in the canonical output order (AN1/2, PH3/4,
++ * AS1/2, ...), one per output pair at 0x34 * pair, see BF_REG_XPOINT_BASE_L.
++ * They used to be read as starting at 0x34, with the first two swapped,
++ * which put every pair from AS1/2 on the wrong output (see that comment).
 + */
-+const u8 bf_xpoint_block[6] = { 1, 0, 2, 3, 4, 5 };
 +
 +/* Master-register output order - the master map lists AN1/2 first
 + * (0x03E0) and the Phones master SECOND (0x03E2, HARDWARE-VERIFIED
-+ * 2026-08-24); the crosspoint blocks are in the opposite order
-+ * (Phones = block 0x34 first, hence bf_xpoint_block above).  Control
-+ * index -> canonical output (AN1/2=0, PH3/4=1, ...) = the master
-+ * register position directly: the names 'AN1/2 Playback Volume' etc.
-+ * must match the register they write (corrected 2026-08-26 - the
-+ * previous {1,0,...} swap made 'AN1/2' drive the Phones and 'PH3/4'
-+ * drive the AN1/2 analog out).
++ * 2026-08-24).  Control index -> canonical output (AN1/2=0, PH3/4=1, ...)
++ * = the master register position directly: the names 'AN1/2 Playback
++ * Volume' etc. must match the register they write (corrected 2026-08-26
++ * - a {1,0,...} swap made 'AN1/2' drive the Phones and 'PH3/4' drive
++ * the AN1/2 analog out).
 + */
 +static const u8 bf_master_out[6] = { 0, 1, 2, 3, 4, 5 };
 +
@@ -287,16 +281,13 @@ index 000000000..a0900baca
 +	}
 +
 +	/* Every playback source into every output pair, L and R, at 0 dB,
-+	 * and the hardware inputs off (the standard map, plus the low map
-+	 * on AN1/2 - see bf_xpoint_write's own comment for why AN1/2 needs
-+	 * both).  The addresses use the source's idx_l/idx_r on the
-+	 * canonical block - writing the raw index on both bases would put
-+	 * PB1 R on the L side and PB1 L on the R side (L+R on both = mono).
-+	 * The "cross" registers (L-reg idx_r / R-reg idx_l) are cleared.
++	 * and the hardware inputs off.  The addresses use the source's
++	 * idx_l/idx_r on the pair's block - writing the raw index on both
++	 * bases would put PB1 R on the L side and PB1 L on the R side (L+R
++	 * on both = mono).  The "cross" registers (L-reg idx_r / R-reg
++	 * idx_l) are cleared.
 +	 */
 +	for (out = 0; out < 6; out++) {
-+		unsigned int blk = bf_xpoint_block[out];
-+
 +		for (src = 0; src < 14; src++) {
 +			/* Only the playback channels are routed out of the
 +			 * box; a hardware input stays out of every output
@@ -307,7 +298,7 @@ index 000000000..a0900baca
 +			if (ret < 0)
 +				return ret;
 +		}
-+		ret = bf_crosspoint_clear_cross(chip, blk);
++		ret = bf_crosspoint_clear_cross(chip, out);
 +		if (ret < 0)
 +			return ret;
 +	}
@@ -545,52 +536,42 @@ index 000000000..a0900baca
 + */
 +static const DECLARE_TLV_DB_LINEAR(bf_xpoint_tlv, TLV_DB_GAIN_MUTE, 600);
 +
-+/* Write a crosspoint slot on the wire: the standard map always, and -
-+ * for the AN1/2 output only - the low map as well.
++/* Write a crosspoint slot on the wire: the pair's block of the map, see
++ * BF_REG_XPOINT_BASE_L.
 + *
-+ * HARDWARE-VERIFIED 2026-09-14: AN1/2 is not just another output with
-+ * a redundant "shadow" register, despite what this file used to say.
-+ * Sweeping only the standard map (BF_REG_CROSS_BASE_*) into AN1/2
-+ * produced no audible change at all, off through +6 dB, with two
-+ * independent sources (a generated tone via PB1, a live mic via AN2);
-+ * the exact same code path targeting any other output (verified on
-+ * PH3/4) tracked the fader correctly, off to +6 dB within 0.6 dB.
-+ * PROTOCOL.md's "Scene load" capture explains why: the vendor software
-+ * always writes BOTH the standard map and the low map
-+ * (BF_REG_LOWMAP_BASE_*) together for AN1/2's own crosspoints, at the
-+ * same value - the low map is what actually feeds that output's sum;
-+ * the standard map alone is not enough. Every other output only has a
-+ * standard map.
++ * AN1/2 is the block at 0x0000.  It used to be written as a "low map"
++ * beside a "standard map" that this function put at 0x0068 (AN1/2 was
++ * thought to be the second block, the Phones the first), and every other
++ * pair was written one block off.  Measured on a Pro FS through the six
++ * digital loopbacks (2026-10-26), one source routed to one pair at a time:
++ * the AN1/2 control came out on AN1/2 and AS1/2, AS1/2 on ADAT3/4, ADAT3/4
++ * on ADAT5/6, ADAT5/6 on ADAT7/8, and ADAT7/8 on nothing (0x0138 is the FX
++ * send).  That also explains the finding of 2026-09-14 that sweeping the
++ * "standard map" alone changed nothing on AN1/2: it was AS1/2's submix.
++ *
++ * The AN1/2 block has only ever been written without the rotating
++ * transaction bits of wIndex, and keeps being: issue #31 reads them as the
++ * gain's lowest bits, which is a separate question.
 + */
 +int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
 +		    u16 l, u16 r)
 +{
-+	unsigned int blk = bf_xpoint_block[out];
 +	const struct bf_source *s = &bf_sources[src];
-+	u16 flag;
++	u16 flag = 0;
 +	int ret;
 +
-+	if (out == 0) {
-+		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l,
-+				      BF_REG_LOWMAP_BASE_L + s->idx_l);
-+		if (ret < 0)
-+			return ret;
-+		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r,
-+				      BF_REG_LOWMAP_BASE_R + s->idx_r);
-+		if (ret < 0)
-+			return ret;
++	if (out) {
++		flag = bf_flag_cycle[chip->flag_cnt];
++		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 +	}
-+
-+	flag = bf_flag_cycle[chip->flag_cnt];
-+	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 +	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l,
-+			      (BF_REG_CROSS_BASE_L + BF_REG_CROSS_STRIDE * blk +
-+			       s->idx_l) | flag);
++			      (BF_REG_XPOINT_BASE_L +
++			       BF_REG_XPOINT_STRIDE * out + s->idx_l) | flag);
 +	if (ret < 0)
 +		return ret;
 +	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, r,
-+			       (BF_REG_CROSS_BASE_R + BF_REG_CROSS_STRIDE * blk +
-+				s->idx_r) | flag);
++			       (BF_REG_XPOINT_BASE_R +
++				BF_REG_XPOINT_STRIDE * out + s->idx_r) | flag);
 +}
 +
 +static int bf_xpoint_info(struct snd_kcontrol *kctl,
@@ -733,7 +714,7 @@ index 000000000..a0900baca
 +	return 0;
 +}
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index cc1d57c16..9e4ef4d25 100644
+index 81a371462..de1659307 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
 @@ -5,7 +5,8 @@
@@ -746,7 +727,7 @@ index cc1d57c16..9e4ef4d25 100644
   */
  #include <linux/delay.h>
  #include <linux/math64.h>
-@@ -249,6 +250,50 @@ int bf_cold_init(struct snd_usb_babyface *chip)
+@@ -249,6 +250,46 @@ int bf_cold_init(struct snd_usb_babyface *chip)
  	return 0;
  }
  
@@ -762,12 +743,8 @@ index cc1d57c16..9e4ef4d25 100644
 +	if (ret < 0)
 +		return ret;
 +
-+	/* Crosspoints (canonical out -> register block; AN1/2 also needs
-+	 * the low map, see bf_xpoint_write's own comment).
-+	 */
++	/* Crosspoints: one block per output pair, see BF_REG_XPOINT_BASE_L. */
 +	for (out = 0; out < 6; out++) {
-+		unsigned int blk = bf_xpoint_block[out];
-+
 +		for (src = 0; src < 14; src++) {
 +			ret = bf_xpoint_write(chip, out, src,
 +					      chip->xpoint[out][src][0],
@@ -775,7 +752,7 @@ index cc1d57c16..9e4ef4d25 100644
 +			if (ret < 0)
 +				return ret;
 +		}
-+		ret = bf_crosspoint_clear_cross(chip, blk);
++		ret = bf_crosspoint_clear_cross(chip, out);
 +		if (ret < 0)
 +			return ret;
 +	}
@@ -797,7 +774,7 @@ index cc1d57c16..9e4ef4d25 100644
  static bool babyface_capture_copy(struct snd_usb_babyface *chip,
  				  struct snd_pcm_substream *subs,
  				  const u8 *data, unsigned int frames)
-@@ -1364,6 +1409,15 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1388,6 +1429,15 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -813,7 +790,7 @@ index cc1d57c16..9e4ef4d25 100644
  	/* Keep the allocation size independent of the active USB mode. */
  	urbsize = BF_WORDS_PER_FRAME * sizeof(u32) * chip->frames_per_urb;
  	chip->urbs_in = kcalloc(chip->nurbs, sizeof(*chip->urbs_in), GFP_KERNEL);
-@@ -1408,6 +1462,18 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1432,6 +1482,18 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -833,7 +810,7 @@ index cc1d57c16..9e4ef4d25 100644
  	if (err < 0) {
  		dev_err(&intf->dev, "snd_card_register failed: %d\n", err);
 diff --git a/sound/usb/babyfacepro/babyfacepro.h b/sound/usb/babyfacepro/babyfacepro.h
-index 93ef4c3a1..c1ec684f9 100644
+index 93ef4c3a1..a3b118bed 100644
 --- a/sound/usb/babyfacepro/babyfacepro.h
 +++ b/sound/usb/babyfacepro/babyfacepro.h
 @@ -11,7 +11,10 @@
@@ -859,25 +836,33 @@ index 93ef4c3a1..c1ec684f9 100644
  #define BF_REQ_DDS			0x1b	/* clock quads */
  #define BF_REQ_STATUS_2			0x1c	/* read 4 B */
  #define BF_REQ_SESSION_START		0x1d
-@@ -114,6 +119,89 @@
+@@ -114,6 +119,96 @@
   */
  #define BF_SETTINGS_CLOCK_INTERNAL	0x0001
  
 +/* Register addresses (masters + crosspoint matrix). */
 +#define BF_REG_MASTER_16		0x03e0	/* + 2*out (bReq 0x12) */
 +#define BF_REG_MASTER_8			0x0004	/* + 2*out (bReq 0x1a) */
-+#define BF_REG_CROSS_BASE_L		0x0034	/* + 0x34*out + src (bReq 0x12) */
-+#define BF_REG_CROSS_BASE_R		0x004e	/* + 0x34*out + src */
-+#define BF_REG_CROSS_STRIDE		0x0034
-+/* Low map (the AN1/2 monitor bus's own per-source registers, one set
-+ * shared across every output - not one per output block like the
-+ * standard crosspoint map above). NOT a shadow/mirror of the standard
-+ * map for AN1/2: it is what that output actually sums from, and the
-+ * standard map alone has no audible effect on it (hardware-verified
-+ * 2026-09-14, see bf_xpoint_write's own comment and KERNEL-DRIVER.md).
++/* The crosspoint map, one block per output pair, in the canonical order
++ * (AN1/2, PH3/4, AS1/2, ADAT3/4, ADAT5/6, ADAT7/8), then the FX send bus:
++ *
++ *	left side  = 0x0000 + 0x34 * pair + idx_l
++ *	right side = 0x001a + 0x34 * pair + idx_r		(bReq 0x12)
++ *
++ * Measured on a Pro FS through the six digital loopbacks (2026-10-26, and
++ * issue #31 from captures of RME's driver): the block at 0x0034 feeds
++ * PH3/4, 0x0068 AS1/2, 0x009c ADAT3/4, 0x00d0 ADAT5/6, 0x0104 ADAT7/8 and
++ * 0x0138 the FX send.  AN1/2 is the block at 0x0000, the one this file
++ * used to call the "low map": it is not a layer beside a standard map but
++ * the first pair of the one map.  The map used to start at 0x0034 with
++ * the blocks swapped, which fed every pair from AS1/2 on the wrong output.
 + */
-+#define BF_REG_LOWMAP_BASE_L		0x0000	/* + idx_l */
-+#define BF_REG_LOWMAP_BASE_R		0x001a	/* + idx_r */
++#define BF_REG_XPOINT_BASE_L		0x0000	/* + 0x34*pair + idx_l */
++#define BF_REG_XPOINT_BASE_R		0x001a	/* + 0x34*pair + idx_r */
++#define BF_REG_XPOINT_STRIDE		0x0034
++/* The AN1/2 block, for the features that only reach that output. */
++#define BF_REG_LOWMAP_BASE_L		BF_REG_XPOINT_BASE_L
++#define BF_REG_LOWMAP_BASE_R		BF_REG_XPOINT_BASE_R
 +
 +/* The "cross" register block within each output: the L-registers sit at
 + * odd offsets 5..23 and the R-registers at even offsets 4..22 (the stereo
@@ -934,9 +919,8 @@ index 93ef4c3a1..c1ec684f9 100644
 +	u8 idx_r;
 +};
 +
-+/* Crosspoint-source order + register block maps (babyfacepro-ctl.c). */
++/* Crosspoint-source order (babyfacepro-ctl.c). */
 +extern const struct bf_source bf_sources[14];
-+extern const u8 bf_xpoint_block[6];
 +
 +/* The first playback source in bf_sources[]: the four analog inputs, the
 + * optical input and the three ADAT pairs come first, the six playback
@@ -949,7 +933,7 @@ index 93ef4c3a1..c1ec684f9 100644
  struct snd_usb_babyface {
  	struct snd_card *card;
  	struct usb_device *dev;
-@@ -160,6 +248,13 @@ struct snd_usb_babyface {
+@@ -160,6 +255,13 @@ struct snd_usb_babyface {
  	 */
  	ktime_t in_done;
  	unsigned int out_inflight;
@@ -963,7 +947,7 @@ index 93ef4c3a1..c1ec684f9 100644
  };
  
  struct bf_rate {
-@@ -185,3 +280,23 @@ void babyface_stream_kill(struct snd_usb_babyface *chip);
+@@ -185,3 +287,23 @@ void babyface_stream_kill(struct snd_usb_babyface *chip);
  void babyface_pcm_stop_both(struct snd_usb_babyface *chip, snd_pcm_state_t state);
  void babyface_stream_work(struct work_struct *work);
  extern const struct snd_pcm_hw_constraint_list bf_rates_constraint;
@@ -975,7 +959,7 @@ index 93ef4c3a1..c1ec684f9 100644
 +extern const u16 bf_flag_cycle[4];
 +int bf_vendor_write_cycle(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx);
 +int bf_crosspoint_clear_cross(struct snd_usb_babyface *chip,
-+			      unsigned int blk);
++			      unsigned int pair);
 +int babyface_write_default_mixer(struct snd_usb_babyface *chip);
 +int bf_apply_masters(struct snd_usb_babyface *chip);
 +int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
