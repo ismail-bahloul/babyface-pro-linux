@@ -90,6 +90,31 @@ These rows measure stability, not latency. The round-trip figures in
 `KERNEL-DRIVER.md` come from the earlier fixed-size URBs (2026-08-24), where
 the latency did not follow the period; they no longer describe the driver.
 
+### Round trip through PipeWire
+
+Measured on 2026-10-27 with a JACK-API client under `pw-jack` (an impulse
+on playback 1, found on the AS1/2 loopback, capture 5), the quantum forced
+with `clock.force-quantum`, one 8-second run per row, each steady to the
+frame. A user measured 17 frames more with Cable on a cabled output, which
+is the converters:
+
+| quantum | before 2026-10-27 | now |
+|---|---|---|
+| 32 | 170 | 170 |
+| 64 | 234 or 298 | 298 |
+| 128 | 554 | **490** |
+| 256 | 1066 | **938** |
+
+Through PipeWire the round trip is **4 periods + 42 frames**, one period
+more than the 3 periods + 42 of the `read`/`write` test below, because the
+graph processes a period after it was captured. The driver used to keep two
+periods of URBs in flight; from a 128-frame period up it splits the period
+in two URBs and keeps three, one and a half periods, which is half a period
+less (64 frames at 128, 128 at 256). That was soaked for 10 minutes at 128
+and 256 frames (48 kHz, 12 channels, mmap, real-time priority) with no
+xrun. At other rates it only applies while a URB lasts at least 1.33 ms.
+`urb_split=1` goes back to two periods, `urb_split=2` forces the split.
+
 ### Round-trip latency
 
 Measured on 2026-10-26 with `tools/kernel/delay-sweep.sh` (`looplat
