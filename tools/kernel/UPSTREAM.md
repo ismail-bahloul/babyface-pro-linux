@@ -504,7 +504,11 @@ sh tools/kernel/regress.sh --dur 1 --mixer-restore --disconnect-test
 /lib/modules/$(uname -r)/build/scripts/checkpatch.pl --no-tree --file <file>
 ```
 
-## v7 - RE-CUT 2026-10-27, not sent
+## v7 - SENT 2026-10-27 (re-cut, rebased on next-20261026)
+
+Sent 2026-10-27 11:31 UTC, nine messages, `Result: 250` on each.  The
+series is in the linux-sound archive; `s:"RME Babyface Pro driver"` on
+lore finds the thread.  No reply yet as of the same evening.
 
 Folds in the fixes made since v6 on the same 8-patch split.  First cut
 2026-10-23 on next-20261002; re-cut 2026-10-27 to pick up the four
@@ -567,7 +571,8 @@ not confirmed by turning the wheel.
 Decision 2026-10-23: do not send a v7 email.  v6 drew no reply and the
 lists are busy; keep the series ready and go in as a direct submission
 when the time comes.  Before submitting, rebase onto the then-current
-linux-next and regenerate the patches; the rest is done.
+linux-next and regenerate the patches; the rest is done.  Carried out
+2026-10-27: one series, no separate ping email.
 
 Tagged `[PATCH v7 0/8]`, not `[RFC PATCH v7 0/8]` as v3 to v6 were.
 That follows from the decision above: an RFC is the wrapper for a design

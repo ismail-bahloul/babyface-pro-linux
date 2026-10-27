@@ -4,10 +4,11 @@ How to mail a kernel patch series from this repo with `git send-email`
 (via Gmail SMTP). Written down so a future submission (v2, etc.) is a
 paste, not a re-investigation.
 
-> Status 2026-10-27: v7 is rebuilt on next-20261026 and ready.  It goes
-> out as a direct submission, `[PATCH v7 0/8]` with no RFC tag and no
-> preliminary email: the design rounds are over, and the cover says so
-> in one line.
+> Status 2026-10-27: v7 was sent at 11:31 UTC as `[PATCH v7 0/8]`,
+> nine messages, `Result: 250` on each, no RFC tag and no separate ping.
+> It is in the linux-sound archive; the thread is the only one found by
+> `s:"RME Babyface Pro driver"`.  This recipe stays for v8 or for
+> replying on the list.
 
 ## Prerequisites (CachyOS/Arch)
 
