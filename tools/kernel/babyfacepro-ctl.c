@@ -2168,6 +2168,26 @@ static void bf_panel_sel_hint(struct snd_usb_babyface *chip)
 			      "front panel: the SELECT channel selection is not known (the unit keeps it, and the driver cannot read it), so SET and the wheel do nothing; press SELECT to see it, then set the \"Front Panel Selection\" control of the IN pair shown (index 0 = Ch 1/2) to match\n");
 }
 
+/* Canonical output pair of the OUT selection (enum 1 = Ch 1/2,
+ * 2 = Phones, 3 = Opt): AN1/2, PH3/4, AS1/2.  "Opt" is the first
+ * optical pair, and the optical format does not move it: with the port
+ * set to ADAT that pair is ADAT 1/2, with it set to S/PDIF it is the
+ * S/PDIF pair (bf_sources), the same output register either way.  The
+ * ADAT7/8 this used to point at was an assumption - PROTOCOL.md leaves
+ * the optical outputs unmeasured.
+ */
+static int bf_panel_out_pair(struct snd_usb_babyface *chip)
+{
+	switch (READ_ONCE(chip->panel_out)) {
+	case 2:
+		return 1;
+	case 3:
+		return 2;
+	default:
+		return 0;
+	}
+}
+
 /* The kernel driver plays the TotalMix role for the MIX button (the
  * standalone emulator is hardware-validated in tuxmix-core/src/panel.rs
  * + usb.rs): one wheel click in fader mode = +/-0.5 dB on the SELECT-
@@ -2179,12 +2199,7 @@ static void bf_panel_sel_hint(struct snd_usb_babyface *chip)
  */
 static void bf_panel_mix_wheel(struct snd_usb_babyface *chip, int delta)
 {
-	/* Canonical output of the OUT selection (enum 1 = Ch1/2,
-	 * 2 = Phones, 3 = Opt): AN1/2, PH3/4, ADAT7/8 (the optical
-	 * output) respectively.
-	 */
-	int out = READ_ONCE(chip->panel_out) == 3 ? 5 :
-		  READ_ONCE(chip->panel_out) == 2 ? 1 : 0;
+	int out = bf_panel_out_pair(chip);
 	u8 targets[2];
 	int n = 0;
 	int db2;
@@ -2311,7 +2326,7 @@ static void bf_panel_write_master(struct snd_usb_babyface *chip, int out,
  * level.  A muted output ignores the wheel (see bf_panel_remute()).
  * Both sides move by the louder side's step, so a balance (hold-SELECT)
  * is kept.  Same output mapping as the MIX wheel (Phones = canon 1,
- * Opt = ADAT7/8 = canon 5, else AN1/2).
+ * Opt = canon 2, else AN1/2).
  */
 static void bf_panel_out_wheel_write(struct snd_usb_babyface *chip, int out,
 				     u16 l, u16 r)
@@ -2428,8 +2443,7 @@ static void bf_out_wheel_click(int db[2], int step)
 
 static void bf_panel_out_wheel(struct snd_usb_babyface *chip, int delta)
 {
-	int out = READ_ONCE(chip->panel_out) == 3 ? 5 :
-		  READ_ONCE(chip->panel_out) == 2 ? 1 : 0;
+	int out = bf_panel_out_pair(chip);
 	int dir = delta > 0 ? 1 : -1;
 	int clicks = abs(delta);
 	ktime_t now = ktime_get();
@@ -2590,8 +2604,7 @@ static void bf_panel_gain_wheel(struct snd_usb_babyface *chip, int delta)
  */
 static void bf_panel_balance_wheel(struct snd_usb_babyface *chip, int delta)
 {
-	int out = READ_ONCE(chip->panel_out) == 3 ? 5 :
-		  READ_ONCE(chip->panel_out) == 2 ? 1 : 0;
+	int out = bf_panel_out_pair(chip);
 	int db[2], ch, i, louder, bal, lim;
 
 	mutex_lock(&chip->mutex);
@@ -2890,8 +2903,7 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 			 * the first SELECT-chosen channel of the IN pair;
 			 * Opt = the AS1/2 pair).
 			 */
-			out = READ_ONCE(chip->panel_out) == 3 ? 5 :
-			      READ_ONCE(chip->panel_out) == 2 ? 1 : 0;
+			out = bf_panel_out_pair(chip);
 			ref = READ_ONCE(chip->panel_in) == 3 ? 4 :
 			      (READ_ONCE(chip->panel_in) == 2 ? 2 : 0) +
 			      (READ_ONCE(chip->panel_select) == 1 ? 1 : 0);

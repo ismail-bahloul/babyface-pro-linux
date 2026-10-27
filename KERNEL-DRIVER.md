@@ -192,8 +192,14 @@ first-impulse method.)  Full sweep `tools/kernel/latency-sweep.sh`:
    - **Optical Out format** (`Optical Out Format` enum, ADAT/S/PDIF) -
      bit 10 of the same keepalive word. ADAT is the default, matching
      the previous hardcoded behavior; S/PDIF carries only AS1/2 on the
-     fibre. The front-panel OUT=Opt wheel mapping in S/PDIF mode is not
-     verified yet (the driver currently moves ADAT7/8 either way).
+     fibre. The front-panel OUT=Opt wheel now moves AS1/2 (output pair
+     2, the first optical pair) in both formats: that pair is ADAT 1/2
+     with the port set to ADAT and the S/PDIF pair with it set to
+     S/PDIF, so the format does not move the target. It used to move
+     ADAT7/8, which was an assumption - PROTOCOL.md measures the wheel
+     on the headphone output only and leaves the optical outputs
+     unmeasured. Turning the wheel with OUT=Opt is still the check that
+     settles it.
    - **Ref level** (`Instrument Ref Level` enum, +4dBu/-10dBV/Boost) —
      a single shared switch for the Instrument pair, not per-channel
      (no separate bits exist for IN3 vs IN4). Boost's distinguishing
