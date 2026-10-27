@@ -1068,6 +1068,27 @@ static unsigned int bf_session_period(struct snd_usb_babyface *chip)
 	return chip->urb_frames * DIV_ROUND_UP(chip->urbs_active, 2);
 }
 
+static int urb_split;
+
+/* Does this session split its period into two URBs?  Then the queue is
+ * three URBs, one and a half periods, instead of four URBs, two periods:
+ * the round trip is half a period shorter for each of playback and
+ * capture's share of it (64 frames at a 128 period, 128 at 256).  Auto
+ * does it for the periods that were soaked for 10 minutes without an
+ * xrun (128 and 256 frames at 48 kHz, 12 channels, mmap, real-time
+ * priority), and for other rates only while a URB lasts at least 1.33 ms,
+ * the length of those.  Below that the URB is already near its floor.
+ */
+static bool bf_split_period(const struct bf_rate *r, unsigned int period)
+{
+	if (urb_split == 1)
+		return false;
+	if (urb_split > 1)
+		return true;
+	return period >= 128 && period <= 256 &&
+	       (period / 2) * 750 >= r->rate;
+}
+
 /* The URB size for a session, chosen from the period the application
  * asked for, as snd-usb-audio sizes its playback URBs: split the period
  * into the fewest URBs of at most frames_per_urb, and make each a whole
@@ -1089,6 +1110,8 @@ static unsigned int bf_urb_frames(struct snd_usb_babyface *chip,
 	if (!hi || lo > hi || period < pkt)
 		return 0;
 	urb = rounddown(period / DIV_ROUND_UP(period, hi), pkt);
+	if (bf_split_period(r, period))
+		urb = rounddown(urb / 2, pkt);
 	urb = clamp(urb, lo, hi);
 	return urb <= period ? urb : 0;
 }
@@ -1348,9 +1371,10 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 		 * whole URBs, see bf_session_period()), so neither direction
 		 * gets more queued than its own buffer.
 		 */
-		n = clamp_t(unsigned int,
-			    2 * (params_period_size(params) / urb),
-			    2, chip->nurbs);
+		n = 2 * (params_period_size(params) / urb);
+		if (bf_split_period(r, params_period_size(params)))
+			n--;
+		n = clamp_t(unsigned int, n, 2, chip->nurbs);
 		if (urb != chip->urb_frames || n != chip->urbs_active) {
 			/* This application's other direction may still
 			 * run: stop it with an xrun, prepare() refuses it
@@ -1546,6 +1570,8 @@ module_param(frames_per_urb, int, 0444);
 MODULE_PARM_DESC(frames_per_urb, "Largest URB in audio frames, 8..1024 (256 = default); the period chooses the size below it.");
 module_param(urb_frames_min, int, 0444);
 MODULE_PARM_DESC(urb_frames_min, "Smallest URB in audio frames, 8..1024 (32 = default, 16 = low-latency floor).");
+module_param(urb_split, int, 0444);
+MODULE_PARM_DESC(urb_split, "Split the period into two URBs, queueing 1.5 periods instead of 2: 0 = auto (default), 1 = never, 2 = always.");
 module_param(nurbs, int, 0444);
 MODULE_PARM_DESC(nurbs, "Most URBs in flight per direction, 2..16 (8 = default).");
 module_param(panel_poll_ms, int, 0444);
