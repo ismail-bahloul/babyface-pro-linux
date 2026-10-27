@@ -86,6 +86,9 @@ unbind/rebind and on S3 suspend/resume.
 `selhold_probe2.sh` / `mix_display_probe.sh` drive the front-panel
 readback (they build `usbwrite` automatically if missing);
 `panel_monitor.py` / `mix_test.py` watch the panel ALSA controls live.
+`panel-watch.sh [card] [seconds]` is the quick one: it prints the OUT/IN
+selection and the six output masters, one line per change, so turning
+the wheel shows which pair it moves.
 
 ## 7. Automated validation
 

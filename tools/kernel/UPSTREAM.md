@@ -565,8 +565,10 @@ Out Format` controls come up after the reload.  The fuller run on the
 first cut (7.2.11) also had the mmap sweep 38/38, the AS1/2 loopback
 on ch4/5 at about -30 dBFS, `pcmlate` PASS at periods 256/1024/2048
 @48 kHz, and a one-second tone through `dmix` playing and returning.
-The OUT=Opt wheel target is the one part of the re-cut that is still
-not confirmed by turning the wheel.
+The OUT=Opt wheel target was confirmed on the FS on 2026-10-27, by
+turning the wheel: the AS1/2 master moved and the other five output
+masters did not.  What is still unmeasured is the audio on the fibre
+itself, which needs S/PDIF-only gear at the other end.
 
 Decision 2026-10-23: do not send a v7 email.  v6 drew no reply and the
 lists are busy; keep the series ready and go in as a direct submission
