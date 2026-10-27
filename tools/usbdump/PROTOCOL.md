@@ -501,6 +501,17 @@ those few writes + the driver opening the ISO endpoints. No firmware
 dump, no register table to upload. Bit 1 of register 0x17 = streaming
 active (0x0D → 0x0F).
 
+> **Disputed (reported in #31, 2026-10-26; not yet checked on the FS).**
+> RME's driver sends `0x10 0x8000 0x8000`, `0x1D 0x0000 0x0000` and `0x14
+> 0x0000 0xC000` once as a stream starts and `0x13 0x0000 0xC000` as it ends,
+> and after a stall restarts with `0x1D` alone. Streams without a stall (4 s
+> at 32 kHz and at 96 kHz) carry nothing between start and end, so on that
+> reading a repeating cycle shows streams being stopped and started again, not
+> a keepalive. The trigger's bit 15 also follows the buffer size: `0x8000` at
+> 512 samples and more (512, 1024 and 2048 tried), `0x0000` at 256 and less
+> (256, 96, 64 and 48 tried). What the bit does is unknown. The kernel
+> driver's default 256-frame URBs are on the `0x0000` side.
+
 ## Sample rate / clock (cap_rates.pcap + cap_rates2.pcap, 2026-08-22)
 
 **CORRECTED 2026-09-16 — the rate is the family register plus the alt,
@@ -677,6 +688,18 @@ captured). Settings changes produce NO register writes — only this
 flag word (EXCEPT pitch, which writes the 0x1B DDS quads, and the full
 state uploads the app does on open/OK, which are host-side re-syncs
 and not needed to change a setting).
+
+> **Disputed (reported in #31, 2026-10-26; not yet checked on the FS).**
+> Captures of RME's driver 1.277 and TotalMix FX 1.991 on a Babyface Pro
+> rev 6 (firmware 211) read this word differently. Bit 6 set means EQ for
+> Record **off**: `0x0041` came with the Settings dialog's checkbox cleared,
+> `0x0001` with it ticked, as installed, the opposite of the table above.
+> TMS writes no bit. And the word is not a keepalive: RME's driver writes it
+> when the Settings dialog opens and after each change in it, never at
+> intervals, and none of 42 captures taken without the dialog holds it, those
+> with audio streaming included. The `0x0441` of a rate change would then be
+> Optical Out SPDIF with EQ for Record off. To settle it: set a strong EQ on
+> an input and compare a capture with the bit set and with it clear.
 
 ### Pitch / varispeed — the 0x1B quad is 24-bit fixed point (cap_pitch.pcap, 2026-08-23, FULL SWEEP DECODED)
 
@@ -1009,6 +1032,23 @@ the audio RMS stays flat while the telemetry counts up. The telemetry
 has no output-level fields; host-side meter computation is the only
 way (and what TotalMix itself does).
 
+> **Disputed (reported in #31, 2026-10-26; not yet checked on the FS).**
+> Bulk `0x85` carries the meters. The 480-byte block holds 40 of them: 64-bit
+> power levels from offset `0x000` and 32-bit peak levels from `0x140`, each
+> part in the order 12 inputs, 12 playbacks, 2 more (presumably the FX bus),
+> 12 outputs, 2 more. They move without any audio stream: with nothing
+> streaming, AN2's power level rose from 1.0e5 to 1.6e8 when its gain went to
+> 20 dB, and AN1's to 2.1e11 when its 48 V came on. A peak level is 16 times
+> the largest magnitude since the last read (a negative sample counting as its
+> ones' complement, |s| - 1); a power level is a leaky accumulator, `acc = acc
+> - (acc >> 13) + 16 * x^2` per sample, read as `acc >> 8`. The block arrives
+> about 47 times a second at rest. `0x8B` delivers no such block: it answers
+> with 8-byte records only while audio streams. If that is right, "There is no
+> separate VU-meter register" above is wrong, the words read as accumulators
+> are the power levels, and a driver could report input levels without opening
+> a capture stream. To check: read `0x85` at rest on the FS while changing an
+> input's gain or its 48 V.
+
 ## Open gap: firmware never marks the stream "active" (blocks 48V + real audio)
 
 **RESOLVED 2026-08-22 (late): the blocker was a SWAPPED 48V mapping, not
@@ -1119,6 +1159,9 @@ requests, not in TotalMix's presence.
   per-URB API cannot express this and times out).
 - 14336-byte single interrupt URBs never complete; 448-B (one
   `wMaxPacketSize`) URBs do.
+  (Reported in #31: RME's driver's 14336-byte transfers at a buffer size of
+  256 complete, and so do the kernel driver's default 256-frame URBs, so this
+  is not a limit of the endpoint.)
 - Submitting ISO URBs on interface 5's endpoints fails with `EINVAL`
   in the kernel (they are interrupt endpoints) — the earlier "ISO on
   the right pair" retests could never have worked.
@@ -1593,7 +1636,9 @@ EQ enabled with real parameter changes (user actions: enable, Low
   tone on PB1 → AN1/2 OUT, writing `0x15 0x0001 wIdx=0` makes the tone
   appear on the IN-stream channels 0/1 (AN1/2 input) at ≈ -24 dBFS
   (the source is -18 dBFS — the loopback tap sits ~6 dB below the
-  digital output level). The flag engages from channel 0 alone (ch 1
+  digital output level; **superseded**: the record follows the master 1:1,
+  see the loopback measurements below, which #31's captures confirm). The
+  flag engages from channel 0 alone (ch 1
   alone does nothing). **OFF quirk**: `0x15 0x0000` on ch 0/1 alone
   sometimes does NOT clear it (stays engaged), while a full 30-channel
   clear always does; one clear via ch 1 alone also worked — the exact
@@ -1798,6 +1843,17 @@ re-link, 48V toggle, stereo-mode gain changes. Decoded:
   0x0138/0x0152/0x0139/0x0153); linked base = 0x0400; + bit 0x1000 =
   the AN 1>2 copy mode (0x1400). Re-link rewrites the crosspoints
   (0x1000/-6 dB per side) without touching 0x1000 again.
+
+  **Disputed (reported in #31, 2026-10-26; not yet checked on the FS):**
+  TotalMix FX 1.991 writes `0x17 0x0000 0x1000` for both the join and the
+  split, and the unit ignores value bits outside wIndex's mask (DIM writes
+  `0x17 0x2001 0x2000`, and the `0x17` read shows bit 13 set and bit 0 still
+  clear), so `0x0400` is harmless. It writes a stereo strip at 0 dB with its
+  balance in the middle as `0x2000` (32768) on each side, the crossed
+  crosspoints at 0, and writes nothing when joining or splitting: the split
+  strips are panned fully left and right. So `0x1000` would make a joined
+  pair 6 dB quieter than TotalMix FX does. To check: a joined pair's level on
+  the FS through its output loopback.
 - **48V is per-mic in split mode** (0x000E = AN2 only = 0x0C|0x02),
   but **in stereo-linked mode TotalMix writes BOTH bits (0x000F)** —
   a single 48V toggle in stereo mode = 0x0F ↔ 0x0C.

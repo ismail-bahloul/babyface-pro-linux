@@ -216,6 +216,13 @@ routing/mute change; restore with 0x2000.
 
 - `0x10 0x0041 0x05CF` = EQ for Record ON (bit 6), `0x0001` = off.
 - `0x10 0x0401 0x05CF` = Optical Out SPDIF (bit 10), `0x0001` = ADAT.
+
+> **Disputed (reported in #31, 2026-10-26):** captures of RME's driver on a
+> Babyface Pro rev 6 (firmware 211) put bit 6 the other way round, set meaning
+> EQ for Record **off**, and show the word written only when the Settings
+> dialog opens and after each change in it, not at intervals. See the note in
+> `tools/usbdump/PROTOCOL.md` under the settings word. Not yet checked on the
+> FS.
 These are the same keepalive register as step 4 — set all bits at once
 (e.g. clock Optical + EQ-record = `0x0045`).
 
