@@ -335,13 +335,27 @@ static int bf_master_get(struct snd_kcontrol *kctl,
  * volume: mute wins, and DIM is the fixed -20 dB step on the Phones
  * pair, so every writer derives the wire value the same way.
  */
-static u16 bf_out_wire(bool muted, bool dim, u16 step)
+/* The two master registers to put on the wire.  The cache keeps the
+ * real volume: mute wins, and DIM is the exact -20 dB pair the
+ * hardware's own button writes (0xcb / 0x0333, cap_dim2.pcap), not the
+ * master curve's value at that step.
+ */
+static u8 bf_out_reg8(bool muted, bool dim, u16 step)
+{
+	if (muted)
+		return BF_MASTER_MUTE;
+	if (dim)
+		return BF_MASTER_MINUS20_8;
+	return bf_master_reg8(step);
+}
+
+static u16 bf_out_reg16(bool muted, bool dim, u16 step)
 {
 	if (muted)
 		return 0;
 	if (dim)
-		return BF_MASTER_STEP_MINUS20;
-	return step;
+		return BF_MASTER_MINUS20_16;
+	return bf_master_reg16(step);
 }
 
 static int bf_master_put(struct snd_kcontrol *kctl,
@@ -351,7 +365,8 @@ static int bf_master_put(struct snd_kcontrol *kctl,
 	int out = bf_master_out[kctl->private_value];
 	long nl = ucontrol->value.integer.value[0];
 	long nr = ucontrol->value.integer.value[1];
-	u16 l, r, wire_l, wire_r, flag;
+	bool muted, dim;
+	u16 l, r, flag;
 	int ret = 0;
 
 	/* Reject anything outside the declared range, so the registers and
@@ -369,27 +384,29 @@ static int bf_master_put(struct snd_kcontrol *kctl,
 	if (l == chip->master[out][0] && r == chip->master[out][1])
 		goto out;
 
-	wire_l = bf_out_wire(chip->muted[out], out == 1 && chip->dim, l);
-	wire_r = bf_out_wire(chip->muted[out], out == 1 && chip->dim, r);
+	muted = chip->muted[out];
+	dim = out == 1 && chip->dim;
 	flag = bf_flag_cycle[chip->flag_cnt];
 	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 
 	/* Both registers, as TotalMix writes them: the 8-bit is the analog
 	 * level, the 16-bit the digital one.
 	 */
-	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wire_l),
+	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, l),
 			      BF_REG_MASTER_8 + 2 * out);
 	if (ret < 0)
 		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wire_r),
+	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, r),
 			      BF_REG_MASTER_8 + 2 * out + 1);
 	if (ret < 0)
 		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wire_l),
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+			      bf_out_reg16(muted, dim, l),
 			      (BF_REG_MASTER_16 + 2 * out) | flag);
 	if (ret < 0)
 		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wire_r),
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+			      bf_out_reg16(muted, dim, r),
 			      (BF_REG_MASTER_16 + 2 * out + 1) | flag);
 	if (ret < 0)
 		goto out;
@@ -438,34 +455,38 @@ static int bf_mute_put(struct snd_kcontrol *kctl,
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
 	int out = bf_master_out[kctl->private_value];
 	bool muted = !ucontrol->value.integer.value[0];
-	u16 l, r, flag;
+	bool dim;
+	u16 flag;
 	int ret = 0;
 
 	mutex_lock(&chip->mutex);
 	if (muted == chip->muted[out])
 		goto out;
 
-	l = bf_out_wire(muted, out == 1 && chip->dim, chip->master[out][0]);
-	r = bf_out_wire(muted, out == 1 && chip->dim, chip->master[out][1]);
+	dim = out == 1 && chip->dim;
 	flag = bf_flag_cycle[chip->flag_cnt];
 	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 
 	/* TotalMix keeps the pre-mute fader value host-side, so unmute
-	 * restores it; mute is step 0, which is the 8-bit mute code.
+	 * restores it; mute is the 8-bit mute code and a zero 16-bit.
 	 */
-	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(l),
+	ret = bf_vendor_write(chip, BF_REQ_GAIN,
+			      bf_out_reg8(muted, dim, chip->master[out][0]),
 			      BF_REG_MASTER_8 + 2 * out);
 	if (ret < 0)
 		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(r),
+	ret = bf_vendor_write(chip, BF_REQ_GAIN,
+			      bf_out_reg8(muted, dim, chip->master[out][1]),
 			      BF_REG_MASTER_8 + 2 * out + 1);
 	if (ret < 0)
 		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(l),
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+			      bf_out_reg16(muted, dim, chip->master[out][0]),
 			      (BF_REG_MASTER_16 + 2 * out) | flag);
 	if (ret < 0)
 		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(r),
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+			      bf_out_reg16(muted, dim, chip->master[out][1]),
 			      (BF_REG_MASTER_16 + 2 * out + 1) | flag);
 	if (ret < 0)
 		goto out;
@@ -1771,7 +1792,8 @@ static int bf_dim_get(struct snd_kcontrol *kctl,
 int bf_dim_apply(struct snd_usb_babyface *chip, bool on)
 {
 	bool old = chip->dim;
-	u16 l, r, flag;
+	bool muted = chip->muted[1];
+	u16 step_l, step_r, flag;
 	int ret;
 
 	lockdep_assert_held(&chip->mutex);
@@ -1780,25 +1802,27 @@ int bf_dim_apply(struct snd_usb_babyface *chip, bool on)
 		chip->dim_saved[1] = chip->master[1][1];
 	}
 	chip->dim = on;
-	l = bf_out_wire(chip->muted[1], on, on ? chip->master[1][0] :
-						 chip->dim_saved[0]);
-	r = bf_out_wire(chip->muted[1], on, on ? chip->master[1][1] :
-						 chip->dim_saved[1]);
+	step_l = on ? chip->master[1][0] : chip->dim_saved[0];
+	step_r = on ? chip->master[1][1] : chip->dim_saved[1];
 	flag = bf_flag_cycle[chip->flag_cnt];
 	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(l),
+	ret = bf_vendor_write(chip, BF_REQ_GAIN,
+			      bf_out_reg8(muted, on, step_l),
 			      BF_REG_MASTER_8 + 2 * 1);
 	if (ret < 0)
 		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(r),
+	ret = bf_vendor_write(chip, BF_REQ_GAIN,
+			      bf_out_reg8(muted, on, step_r),
 			      BF_REG_MASTER_8 + 2 * 1 + 1);
 	if (ret < 0)
 		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(l),
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+			      bf_out_reg16(muted, on, step_l),
 			      (BF_REG_MASTER_16 + 2 * 1) | flag);
 	if (ret < 0)
 		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(r),
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+			      bf_out_reg16(muted, on, step_r),
 			      (BF_REG_MASTER_16 + 2 * 1 + 1) | flag);
 	if (ret < 0)
 		goto out;
@@ -2356,19 +2380,19 @@ static void bf_panel_remute(struct snd_usb_babyface *chip, int out)
 static void bf_panel_write_master(struct snd_usb_babyface *chip, int out,
 				  u16 l, u16 r)
 {
-	u16 flag, wl, wr;
+	bool muted = chip->muted[out];
+	bool dim = out == 1 && chip->dim;
+	u16 flag;
 
-	wl = bf_out_wire(chip->muted[out], out == 1 && chip->dim, l);
-	wr = bf_out_wire(chip->muted[out], out == 1 && chip->dim, r);
 	flag = bf_flag_cycle[chip->flag_cnt];
 	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-	bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wl),
+	bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, l),
 			BF_REG_MASTER_8 + 2 * out);
-	bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wr),
+	bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, r),
 			BF_REG_MASTER_8 + 2 * out + 1);
-	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wl),
+	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_out_reg16(muted, dim, l),
 			(BF_REG_MASTER_16 + 2 * out) | flag);
-	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wr),
+	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_out_reg16(muted, dim, r),
 			(BF_REG_MASTER_16 + 2 * out + 1) | flag);
 	chip->master[out][0] = l;
 	chip->master[out][1] = r;
@@ -2405,15 +2429,15 @@ static void bf_panel_write_master(struct snd_usb_babyface *chip, int out,
 static void bf_panel_out_wheel_write(struct snd_usb_babyface *chip, int out,
 				     u16 l, u16 r)
 {
-	u16 flag, wl, wr;
+	bool muted = chip->muted[out];
+	bool dim = out == 1 && chip->dim;
+	u16 flag;
 
-	wl = bf_out_wire(chip->muted[out], out == 1 && chip->dim, l);
-	wr = bf_out_wire(chip->muted[out], out == 1 && chip->dim, r);
 	flag = bf_flag_cycle[chip->flag_cnt];
 	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wl),
+	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_out_reg16(muted, dim, l),
 			(BF_REG_MASTER_16 + 2 * out) | flag);
-	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wr),
+	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_out_reg16(muted, dim, r),
 			(BF_REG_MASTER_16 + 2 * out + 1) | flag);
 	chip->master[out][0] = l;
 	chip->master[out][1] = r;
@@ -2606,22 +2630,21 @@ static void bf_panel_out_resync(struct snd_usb_babyface *chip)
 			goto unlock;
 	}
 	if (!chip->muted[out]) {
-		u16 wl = bf_out_wire(false, out == 1 && chip->dim,
-				     chip->master[out][0]);
-		u16 wr = bf_out_wire(false, out == 1 && chip->dim,
-				     chip->master[out][1]);
+		bool dim = out == 1 && chip->dim;
 
 		flag = bf_flag_cycle[chip->flag_cnt];
 		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-		bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wl),
+		bf_vendor_write(chip, BF_REQ_GAIN,
+				bf_out_reg8(false, dim, chip->master[out][0]),
 				BF_REG_MASTER_8 + 2 * out);
-		bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wr),
+		bf_vendor_write(chip, BF_REQ_GAIN,
+				bf_out_reg8(false, dim, chip->master[out][1]),
 				BF_REG_MASTER_8 + 2 * out + 1);
 		bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				bf_master_reg16(wl),
+				bf_out_reg16(false, dim, chip->master[out][0]),
 				(BF_REG_MASTER_16 + 2 * out) | flag);
 		bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				bf_master_reg16(wr),
+				bf_out_reg16(false, dim, chip->master[out][1]),
 				(BF_REG_MASTER_16 + 2 * out + 1) | flag);
 	}
 unlock:
