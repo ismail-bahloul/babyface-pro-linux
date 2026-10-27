@@ -198,8 +198,11 @@ first-impulse method.)  Full sweep `tools/kernel/latency-sweep.sh`:
      S/PDIF, so the format does not move the target. It used to move
      ADAT7/8, which was an assumption - PROTOCOL.md measures the wheel
      on the headphone output only and leaves the optical outputs
-     unmeasured. Turning the wheel with OUT=Opt is still the check that
-     settles it.
+     unmeasured. Verified on the FS 2026-10-27 by turning the wheel with
+     OUT=Opt: the AS1/2 master moved (169 up to 193, down to 0 and back)
+     while AN1/2, PH3/4, ADAT3/4, ADAT5/6 and ADAT7/8 stayed put. What is
+     still unmeasured is the audio on the fibre itself, which needs
+     S/PDIF-only gear at the other end.
    - **Ref level** (`Instrument Ref Level` enum, +4dBu/-10dBV/Boost) —
      a single shared switch for the Instrument pair, not per-channel
      (no separate bits exist for IN3 vs IN4). Boost's distinguishing
