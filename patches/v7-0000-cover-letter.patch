@@ -1,7 +1,7 @@
 From 43a5a1ec1b04d3aefd8a09c8dfbb533c9f0b9260 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue Oct 27 11:13:22 2026 +0100
-Subject: [RFC PATCH v7 0/8] ALSA: usb: add RME Babyface Pro driver (proprietary mode)
+Subject: [PATCH v7 0/8] ALSA: usb: add RME Babyface Pro driver (proprietary mode)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -15,6 +15,11 @@ the end, the front panel and the DSP EQ last, and a design document.
 v7 keeps that split and folds in the fixes made since v6, and is
 rebased onto next-20261026, the most recent snapshot at the time of
 writing.
+
+This is not an RFC.  The split you asked for in the v4 review has been
+in place since v5, the open points at the end are documented and none
+of them blocks a merge, so the series is submitted for merge rather
+than for another design round.
 
 Changes since v6:
 
