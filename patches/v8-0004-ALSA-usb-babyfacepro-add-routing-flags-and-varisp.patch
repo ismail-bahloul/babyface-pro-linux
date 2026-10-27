@@ -1,4 +1,4 @@
-From a06ae8af4b720fe053cc3c0320dcc01d9219c090 Mon Sep 17 00:00:00 2001
+From 79b5dabd20bf74a4c95e9d75d40270a4dda8c8ce Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:20 +0100
 Subject: [PATCH v8 4/8] ALSA: usb: babyfacepro: add routing flags and
@@ -22,13 +22,13 @@ moves the level DIM releases back to.
 
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---
- sound/usb/babyfacepro/babyfacepro-ctl.c | 817 ++++++++++++++++++++++--
+ sound/usb/babyfacepro/babyfacepro-ctl.c | 849 ++++++++++++++++++++++--
  sound/usb/babyfacepro/babyfacepro.c     | 118 +++-
  sound/usb/babyfacepro/babyfacepro.h     |  35 +-
- 3 files changed, 901 insertions(+), 69 deletions(-)
+ 3 files changed, 929 insertions(+), 73 deletions(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index dd938ad0a..5758c8b27 100644
+index dd938ad0a..3d94c9cf4 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
 @@ -10,8 +10,10 @@
@@ -53,7 +53,7 @@ index dd938ad0a..5758c8b27 100644
  	return bf_settings_write(chip);
  }
  
-@@ -325,6 +329,19 @@ static int bf_master_get(struct snd_kcontrol *kctl,
+@@ -325,6 +329,33 @@ static int bf_master_get(struct snd_kcontrol *kctl,
  	return 0;
  }
  
@@ -61,30 +61,78 @@ index dd938ad0a..5758c8b27 100644
 + * volume: mute wins, and DIM is the fixed -20 dB step on the Phones
 + * pair, so every writer derives the wire value the same way.
 + */
-+static u16 bf_out_wire(bool muted, bool dim, u16 step)
++/* The two master registers to put on the wire.  The cache keeps the
++ * real volume: mute wins, and DIM is the exact -20 dB pair the
++ * hardware's own button writes (0xcb / 0x0333, cap_dim2.pcap), not the
++ * master curve's value at that step.
++ */
++static u8 bf_out_reg8(bool muted, bool dim, u16 step)
++{
++	if (muted)
++		return BF_MASTER_MUTE;
++	if (dim)
++		return BF_MASTER_MINUS20_8;
++	return bf_master_reg8(step);
++}
++
++static u16 bf_out_reg16(bool muted, bool dim, u16 step)
 +{
 +	if (muted)
 +		return 0;
 +	if (dim)
-+		return BF_MASTER_STEP_MINUS20;
-+	return step;
++		return BF_MASTER_MINUS20_16;
++	return bf_master_reg16(step);
 +}
 +
  static int bf_master_put(struct snd_kcontrol *kctl,
  			 struct snd_ctl_elem_value *ucontrol)
  {
-@@ -350,8 +367,8 @@ static int bf_master_put(struct snd_kcontrol *kctl,
+@@ -332,7 +363,8 @@ static int bf_master_put(struct snd_kcontrol *kctl,
+ 	int out = bf_master_out[kctl->private_value];
+ 	long nl = ucontrol->value.integer.value[0];
+ 	long nr = ucontrol->value.integer.value[1];
+-	u16 l, r, wire_l, wire_r, flag;
++	bool muted, dim;
++	u16 l, r, flag;
+ 	int ret = 0;
+ 
+ 	/* Reject anything outside the declared range, so the registers and
+@@ -350,33 +382,40 @@ static int bf_master_put(struct snd_kcontrol *kctl,
  	if (l == chip->master[out][0] && r == chip->master[out][1])
  		goto out;
  
 -	wire_l = chip->muted[out] ? 0 : l;
 -	wire_r = chip->muted[out] ? 0 : r;
-+	wire_l = bf_out_wire(chip->muted[out], out == 1 && chip->dim, l);
-+	wire_r = bf_out_wire(chip->muted[out], out == 1 && chip->dim, r);
++	muted = chip->muted[out];
++	dim = out == 1 && chip->dim;
  	flag = bf_flag_cycle[chip->flag_cnt];
  	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
  
-@@ -377,6 +394,11 @@ static int bf_master_put(struct snd_kcontrol *kctl,
+ 	/* Both registers, as TotalMix writes them: the 8-bit is the analog
+ 	 * level, the 16-bit the digital one.
+ 	 */
+-	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wire_l),
++	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, l),
+ 			      BF_REG_MASTER_8 + 2 * out);
+ 	if (ret < 0)
+ 		goto out;
+-	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wire_r),
++	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, r),
+ 			      BF_REG_MASTER_8 + 2 * out + 1);
+ 	if (ret < 0)
+ 		goto out;
+-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wire_l),
++	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
++			      bf_out_reg16(muted, dim, l),
+ 			      (BF_REG_MASTER_16 + 2 * out) | flag);
+ 	if (ret < 0)
+ 		goto out;
+-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wire_r),
++	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
++			      bf_out_reg16(muted, dim, r),
+ 			      (BF_REG_MASTER_16 + 2 * out + 1) | flag);
+ 	if (ret < 0)
+ 		goto out;
  
  	chip->master[out][0] = l;
  	chip->master[out][1] = r;
@@ -96,20 +144,19 @@ index dd938ad0a..5758c8b27 100644
  	ret = 1;
  out:
  	mutex_unlock(&chip->mutex);
-@@ -414,58 +436,37 @@ static int bf_mute_put(struct snd_kcontrol *kctl,
+@@ -414,6 +453,7 @@ static int bf_mute_put(struct snd_kcontrol *kctl,
  	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
  	int out = bf_master_out[kctl->private_value];
  	bool muted = !ucontrol->value.integer.value[0];
--	u16 flag;
-+	u16 l, r, flag;
++	bool dim;
+ 	u16 flag;
  	int ret = 0;
  
- 	mutex_lock(&chip->mutex);
+@@ -421,51 +461,33 @@ static int bf_mute_put(struct snd_kcontrol *kctl,
  	if (muted == chip->muted[out])
  		goto out;
  
-+	l = bf_out_wire(muted, out == 1 && chip->dim, chip->master[out][0]);
-+	r = bf_out_wire(muted, out == 1 && chip->dim, chip->master[out][1]);
++	dim = out == 1 && chip->dim;
  	flag = bf_flag_cycle[chip->flag_cnt];
  	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
  
@@ -156,28 +203,32 @@ index dd938ad0a..5758c8b27 100644
 -			goto out;
 -	}
 +	/* TotalMix keeps the pre-mute fader value host-side, so unmute
-+	 * restores it; mute is step 0, which is the 8-bit mute code.
++	 * restores it; mute is the 8-bit mute code and a zero 16-bit.
 +	 */
-+	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(l),
++	ret = bf_vendor_write(chip, BF_REQ_GAIN,
++			      bf_out_reg8(muted, dim, chip->master[out][0]),
 +			      BF_REG_MASTER_8 + 2 * out);
 +	if (ret < 0)
 +		goto out;
-+	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(r),
++	ret = bf_vendor_write(chip, BF_REQ_GAIN,
++			      bf_out_reg8(muted, dim, chip->master[out][1]),
 +			      BF_REG_MASTER_8 + 2 * out + 1);
 +	if (ret < 0)
 +		goto out;
-+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(l),
++	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
++			      bf_out_reg16(muted, dim, chip->master[out][0]),
 +			      (BF_REG_MASTER_16 + 2 * out) | flag);
 +	if (ret < 0)
 +		goto out;
-+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(r),
++	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
++			      bf_out_reg16(muted, dim, chip->master[out][1]),
 +			      (BF_REG_MASTER_16 + 2 * out + 1) | flag);
 +	if (ret < 0)
 +		goto out;
  	chip->muted[out] = muted;
  	ret = 1;
  out:
-@@ -664,6 +665,20 @@ int babyface_create_masters(struct snd_usb_babyface *chip)
+@@ -664,6 +686,20 @@ int babyface_create_masters(struct snd_usb_babyface *chip)
  	return 0;
  }
  
@@ -198,7 +249,7 @@ index dd938ad0a..5758c8b27 100644
  int bf_preamp_state_write(struct snd_usb_babyface *chip)
  {
  	int ret;
-@@ -671,16 +686,7 @@ int bf_preamp_state_write(struct snd_usb_babyface *chip)
+@@ -671,16 +707,7 @@ int bf_preamp_state_write(struct snd_usb_babyface *chip)
  	ret = bf_vendor_write(chip, BF_REQ_PREAMP, chip->preamp, BF_REG_PREAMP);
  	if (ret < 0)
  		return ret;
@@ -216,7 +267,7 @@ index dd938ad0a..5758c8b27 100644
  }
  
  /* Phase (polarity) invert (AN1-4 only, PROTOCOL.md "Phase toggle",
-@@ -1300,3 +1306,702 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
+@@ -1300,3 +1327,705 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
  	}
  	return 0;
  }
@@ -603,7 +654,8 @@ index dd938ad0a..5758c8b27 100644
 +int bf_dim_apply(struct snd_usb_babyface *chip, bool on)
 +{
 +	bool old = chip->dim;
-+	u16 l, r, flag;
++	bool muted = chip->muted[1];
++	u16 step_l, step_r, flag;
 +	int ret;
 +
 +	lockdep_assert_held(&chip->mutex);
@@ -612,25 +664,27 @@ index dd938ad0a..5758c8b27 100644
 +		chip->dim_saved[1] = chip->master[1][1];
 +	}
 +	chip->dim = on;
-+	l = bf_out_wire(chip->muted[1], on, on ? chip->master[1][0] :
-+						 chip->dim_saved[0]);
-+	r = bf_out_wire(chip->muted[1], on, on ? chip->master[1][1] :
-+						 chip->dim_saved[1]);
++	step_l = on ? chip->master[1][0] : chip->dim_saved[0];
++	step_r = on ? chip->master[1][1] : chip->dim_saved[1];
 +	flag = bf_flag_cycle[chip->flag_cnt];
 +	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-+	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(l),
++	ret = bf_vendor_write(chip, BF_REQ_GAIN,
++			      bf_out_reg8(muted, on, step_l),
 +			      BF_REG_MASTER_8 + 2 * 1);
 +	if (ret < 0)
 +		goto out;
-+	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(r),
++	ret = bf_vendor_write(chip, BF_REQ_GAIN,
++			      bf_out_reg8(muted, on, step_r),
 +			      BF_REG_MASTER_8 + 2 * 1 + 1);
 +	if (ret < 0)
 +		goto out;
-+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(l),
++	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
++			      bf_out_reg16(muted, on, step_l),
 +			      (BF_REG_MASTER_16 + 2 * 1) | flag);
 +	if (ret < 0)
 +		goto out;
-+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(r),
++	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
++			      bf_out_reg16(muted, on, step_r),
 +			      (BF_REG_MASTER_16 + 2 * 1 + 1) | flag);
 +	if (ret < 0)
 +		goto out;

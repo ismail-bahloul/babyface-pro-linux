@@ -1,4 +1,4 @@
-From 5eb2e223b2a6e5d84284504a9730793c1a7600dc Mon Sep 17 00:00:00 2001
+From 443c346f55d37e445e50e014c80ab91e3299a1ed Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue Oct 27 11:13:22 2026 +0100
 Subject: [PATCH v8 0/8] ALSA: usb: add RME Babyface Pro driver (proprietary mode)
@@ -90,11 +90,24 @@ Validated on the unit with this tree:
    restored across an unbind/rebind, and an unbind in the middle of a
    capture.
 
-TODO(hardware): three checks need the wheel and an ear before this is
-sent: the DIM/mute/volume matrix (volume and mute while DIM is on,
-unmute while DIM is on, OUT wheel while DIM is on), the width replay
-across a resume with a mic on AN1, and the MIX wheel from a muted
-input (one click up, one click down at the steps that used to stick).
+ - The DIM/mute/volume matrix was checked on the wire with usbmon:
+   DIM writes the exact 0xcb/0x0333 pair, a volume change while DIM
+   is on keeps that pair, mute writes 0x3b/0x0000, unmute while DIM
+   is on restores 0xcb/0x0333, and releasing DIM restores the new
+   volume.
+
+ - The probe/rebind replay was checked on the wire too: after the
+   default mixer writes 0x0000 to the AN1/AN2 crosspoints, no 0x1000
+   write follows, so the width block no longer unmutes the inputs.
+
+ - The MIX-wheel arithmetic is covered by fader_selftest: a muted
+   crosspoint seeds at the curve's first point, one clockwise click
+   leaves mute, and two counter-clockwise clicks from the old -52 dB
+   sticking point move.
+
+TODO(hardware): the physical MIX-wheel gesture still needs one pass
+with the wheel (one click up, one click down at the steps that used to
+stick).  Everything else is covered above.
 
 Known limitations, unchanged from v7:
 
@@ -136,10 +149,10 @@ Ismaïl Bahloul (8):
  sound/usb/Kconfig                          |   17 +
  sound/usb/Makefile                         |    2 +-
  sound/usb/babyfacepro/Makefile             |    4 +
- sound/usb/babyfacepro/babyfacepro-ctl.c    | 3990 ++++++++++++++++++++
+ sound/usb/babyfacepro/babyfacepro-ctl.c    | 4013 ++++++++++++++++++++
  sound/usb/babyfacepro/babyfacepro.c        | 1991 ++++++++++
  sound/usb/babyfacepro/babyfacepro.h        |  568 +++
- 9 files changed, 6796 insertions(+), 1 deletion(-)
+ 9 files changed, 6819 insertions(+), 1 deletion(-)
  create mode 100644 Documentation/sound/cards/babyface-pro.rst
  create mode 100644 sound/usb/babyfacepro/Makefile
  create mode 100644 sound/usb/babyfacepro/babyfacepro-ctl.c

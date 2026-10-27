@@ -1,4 +1,4 @@
-From e9d0eb8d791b8090739b670b79d2f0bbf44c4ef1 Mon Sep 17 00:00:00 2001
+From f58f557e211fa51a957c560e7a7cec2f0f7aebab Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:21 +0100
 Subject: [PATCH v8 6/8] ALSA: usb: babyfacepro: add the front-panel poll and
@@ -61,13 +61,13 @@ Co-developed-by: David Fredman <davfre@gmail.com>
 Signed-off-by: David Fredman <davfre@gmail.com>
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---
- sound/usb/babyfacepro/babyfacepro-ctl.c | 1375 ++++++++++++++++++++++-
+ sound/usb/babyfacepro/babyfacepro-ctl.c | 1374 ++++++++++++++++++++++-
  sound/usb/babyfacepro/babyfacepro.c     |   87 +-
  sound/usb/babyfacepro/babyfacepro.h     |  126 ++-
- 3 files changed, 1581 insertions(+), 7 deletions(-)
+ 3 files changed, 1580 insertions(+), 7 deletions(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index 5758c8b27..4b6e9eb8d 100644
+index 3d94c9cf4..d7438402f 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
 @@ -3,7 +3,8 @@
@@ -80,7 +80,7 @@ index 5758c8b27..4b6e9eb8d 100644
   *
   * See babyfacepro.h for the shared device state and register map,
   * and babyfacepro.c for the core driver (protocol, PCM streaming,
-@@ -608,6 +609,7 @@ int babyface_create_xpoints(struct snd_usb_babyface *chip)
+@@ -629,6 +630,7 @@ int babyface_create_xpoints(struct snd_usb_babyface *chip)
  			err = snd_ctl_add(chip->card, kctl);
  			if (err < 0)
  				return err;
@@ -88,7 +88,7 @@ index 5758c8b27..4b6e9eb8d 100644
  		}
  	}
  
-@@ -840,6 +842,83 @@ static int bf_split_put(struct snd_kcontrol *kctl,
+@@ -861,6 +863,83 @@ static int bf_split_put(struct snd_kcontrol *kctl,
  	return ret;
  }
  
@@ -172,7 +172,7 @@ index 5758c8b27..4b6e9eb8d 100644
  /* Input Trim (T button, AN1-4): PROTOCOL.md "Trim (T) write for the
   * AN1/2 pair" (cap_trim2/3/4.pcap, hardware-verified) - the analog
   * input's own gain-trim, applied through the crosspoint registers
-@@ -1253,6 +1332,7 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
+@@ -1274,6 +1353,7 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
  		err = snd_ctl_add(chip->card, kctl);
  		if (err < 0)
  			return err;
@@ -180,7 +180,7 @@ index 5758c8b27..4b6e9eb8d 100644
  	}
  
  	for (i = 0; i < 2; i++) {
-@@ -1303,6 +1383,7 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
+@@ -1324,6 +1404,7 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
  		err = snd_ctl_add(chip->card, kctl);
  		if (err < 0)
  			return err;
@@ -188,7 +188,7 @@ index 5758c8b27..4b6e9eb8d 100644
  	}
  	return 0;
  }
-@@ -2005,3 +2086,1295 @@ int babyface_create_flags(struct snd_usb_babyface *chip)
+@@ -2029,3 +2110,1294 @@ int babyface_create_flags(struct snd_usb_babyface *chip)
  
  	return 0;
  }
@@ -461,19 +461,19 @@ index 5758c8b27..4b6e9eb8d 100644
 +static void bf_panel_write_master(struct snd_usb_babyface *chip, int out,
 +				  u16 l, u16 r)
 +{
-+	u16 flag, wl, wr;
++	bool muted = chip->muted[out];
++	bool dim = out == 1 && chip->dim;
++	u16 flag;
 +
-+	wl = bf_out_wire(chip->muted[out], out == 1 && chip->dim, l);
-+	wr = bf_out_wire(chip->muted[out], out == 1 && chip->dim, r);
 +	flag = bf_flag_cycle[chip->flag_cnt];
 +	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-+	bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wl),
++	bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, l),
 +			BF_REG_MASTER_8 + 2 * out);
-+	bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wr),
++	bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, r),
 +			BF_REG_MASTER_8 + 2 * out + 1);
-+	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wl),
++	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_out_reg16(muted, dim, l),
 +			(BF_REG_MASTER_16 + 2 * out) | flag);
-+	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wr),
++	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_out_reg16(muted, dim, r),
 +			(BF_REG_MASTER_16 + 2 * out + 1) | flag);
 +	chip->master[out][0] = l;
 +	chip->master[out][1] = r;
@@ -510,15 +510,15 @@ index 5758c8b27..4b6e9eb8d 100644
 +static void bf_panel_out_wheel_write(struct snd_usb_babyface *chip, int out,
 +				     u16 l, u16 r)
 +{
-+	u16 flag, wl, wr;
++	bool muted = chip->muted[out];
++	bool dim = out == 1 && chip->dim;
++	u16 flag;
 +
-+	wl = bf_out_wire(chip->muted[out], out == 1 && chip->dim, l);
-+	wr = bf_out_wire(chip->muted[out], out == 1 && chip->dim, r);
 +	flag = bf_flag_cycle[chip->flag_cnt];
 +	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-+	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wl),
++	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_out_reg16(muted, dim, l),
 +			(BF_REG_MASTER_16 + 2 * out) | flag);
-+	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wr),
++	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_out_reg16(muted, dim, r),
 +			(BF_REG_MASTER_16 + 2 * out + 1) | flag);
 +	chip->master[out][0] = l;
 +	chip->master[out][1] = r;
@@ -711,22 +711,21 @@ index 5758c8b27..4b6e9eb8d 100644
 +			goto unlock;
 +	}
 +	if (!chip->muted[out]) {
-+		u16 wl = bf_out_wire(false, out == 1 && chip->dim,
-+				     chip->master[out][0]);
-+		u16 wr = bf_out_wire(false, out == 1 && chip->dim,
-+				     chip->master[out][1]);
++		bool dim = out == 1 && chip->dim;
 +
 +		flag = bf_flag_cycle[chip->flag_cnt];
 +		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-+		bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wl),
++		bf_vendor_write(chip, BF_REQ_GAIN,
++				bf_out_reg8(false, dim, chip->master[out][0]),
 +				BF_REG_MASTER_8 + 2 * out);
-+		bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wr),
++		bf_vendor_write(chip, BF_REQ_GAIN,
++				bf_out_reg8(false, dim, chip->master[out][1]),
 +				BF_REG_MASTER_8 + 2 * out + 1);
 +		bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-+				bf_master_reg16(wl),
++				bf_out_reg16(false, dim, chip->master[out][0]),
 +				(BF_REG_MASTER_16 + 2 * out) | flag);
 +		bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-+				bf_master_reg16(wr),
++				bf_out_reg16(false, dim, chip->master[out][1]),
 +				(BF_REG_MASTER_16 + 2 * out + 1) | flag);
 +	}
 +unlock:
