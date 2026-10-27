@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.1 (2026-10-27)
+
+### Fixed
+- The crosspoint map had AN1/2 and PH3/4 swapped and shifted every pair
+  after them, so a mix into one output landed in the next pair's submix.
+  It is now `0x34 * pair + 0x1A * side + source`, checked on an FS with a
+  per-pair loopback matrix (#36, from the captures in #31).
+- The EQ's alpha is `sin(w0 / (2Q))`, as TotalMix computes it, which
+  removes the high-frequency warping the notes still listed as open (#35,
+  #31).
+
+### Changed
+- From a 128-frame period the driver keeps one and a half periods of URBs
+  in flight, splitting the period in two. Through PipeWire the round trip
+  drops from 554 to 490 frames at 128 and from 1066 to 938 at 256 (#37).
+- Documentation: the latency page explains the settings and the measured
+  round trip, `tools/delay-sweep.sh` measures it, and the places where the
+  captures in #31 disagree with ours are marked disputed (#32, #33, #34).
+
 ## 0.2.0 (2026-10-23)
 
 ### Added
