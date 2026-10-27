@@ -293,21 +293,21 @@ int bf_cold_init(struct snd_usb_babyface *chip)
  * L-registers (5,7,...23) + 10 even R-registers (4,6,...22).
  */
 int bf_crosspoint_clear_cross(struct snd_usb_babyface *chip,
-			      unsigned int blk)
+			      unsigned int pair)
 {
 	int ret, k;
 
 	for (k = BF_CROSS_L_FIRST; k <= BF_CROSS_L_LAST; k += 2) {
 		ret = bf_vendor_write_cycle(chip, BF_REQ_CROSSPOINT, 0x0000,
-					    BF_REG_CROSS_BASE_L +
-					    BF_REG_CROSS_STRIDE * blk + k);
+					    BF_REG_XPOINT_BASE_L +
+					    BF_REG_XPOINT_STRIDE * pair + k);
 		if (ret < 0)
 			return ret;
 	}
 	for (k = BF_CROSS_R_FIRST; k <= BF_CROSS_R_LAST; k += 2) {
 		ret = bf_vendor_write_cycle(chip, BF_REQ_CROSSPOINT, 0x0000,
-					    BF_REG_CROSS_BASE_R +
-					    BF_REG_CROSS_STRIDE * blk + k);
+					    BF_REG_XPOINT_BASE_R +
+					    BF_REG_XPOINT_STRIDE * pair + k);
 		if (ret < 0)
 			return ret;
 	}
@@ -396,12 +396,8 @@ int babyface_restore_state(struct snd_usb_babyface *chip)
 	if (ret < 0)
 		return ret;
 
-	/* Crosspoints (canonical out -> register block; AN1/2 also needs
-	 * the low map, see bf_xpoint_write's own comment).
-	 */
+	/* Crosspoints: one block per output pair, see BF_REG_XPOINT_BASE_L. */
 	for (out = 0; out < 6; out++) {
-		unsigned int blk = bf_xpoint_block[out];
-
 		for (src = 0; src < 14; src++) {
 			ret = bf_xpoint_write(chip, out, src,
 					      chip->xpoint[out][src][0],
@@ -409,7 +405,7 @@ int babyface_restore_state(struct snd_usb_babyface *chip)
 			if (ret < 0)
 				return ret;
 		}
-		ret = bf_crosspoint_clear_cross(chip, blk);
+		ret = bf_crosspoint_clear_cross(chip, out);
 		if (ret < 0)
 			return ret;
 	}

@@ -133,23 +133,26 @@
 #define BF_REG_MASTER_16		0x03e0	/* + 2*out (bReq 0x12) */
 #define BF_REG_MASTER_8			0x0004	/* + 2*out (bReq 0x1a) */
 #define BF_REG_GAIN			0x0000	/* + mic 0-3 (bReq 0x1a) */
-#define BF_REG_CROSS_BASE_L		0x0034	/* + 0x34*out + src (bReq 0x12) */
-#define BF_REG_CROSS_BASE_R		0x004e	/* + 0x34*out + src */
-#define BF_REG_CROSS_STRIDE		0x0034
-/* Low map (the AN1/2 monitor bus's own per-source registers, one set
- * shared across every output - not one per output block like the
- * standard crosspoint map above). NOT a shadow/mirror of the standard
- * map for AN1/2: it is what that output actually sums from, and the
- * standard map alone has no audible effect on it (hardware-verified
- * 2026-09-14, see bf_xpoint_write's own comment and KERNEL-DRIVER.md).
- * Used by bf_ms_put/width's own hardcoded addresses, by bf_split_apply/
- * bf_phase_apply/bf_trim_apply for their own AN1/2-only features, and
- * by bf_xpoint_write for the general crosspoint fader.  PROTOCOL.md /
- * tuxmix-usb's `map::low_map_l`/`low_map_r` (hardware-verified) use
- * the identical BASE + idx shape.
+/* The crosspoint map, one block per output pair, in the canonical order
+ * (AN1/2, PH3/4, AS1/2, ADAT3/4, ADAT5/6, ADAT7/8), then the FX send bus:
+ *
+ *	left side  = 0x0000 + 0x34 * pair + idx_l
+ *	right side = 0x001a + 0x34 * pair + idx_r		(bReq 0x12)
+ *
+ * Measured on a Pro FS through the six digital loopbacks (2026-10-26, and
+ * issue #31 from captures of RME's driver): the block at 0x0034 feeds
+ * PH3/4, 0x0068 AS1/2, 0x009c ADAT3/4, 0x00d0 ADAT5/6, 0x0104 ADAT7/8 and
+ * 0x0138 the FX send.  AN1/2 is the block at 0x0000, the one this file
+ * used to call the "low map": it is not a layer beside a standard map but
+ * the first pair of the one map.  The map used to start at 0x0034 with
+ * the blocks swapped, which fed every pair from AS1/2 on the wrong output.
  */
-#define BF_REG_LOWMAP_BASE_L		0x0000	/* + idx_l */
-#define BF_REG_LOWMAP_BASE_R		0x001a	/* + idx_r */
+#define BF_REG_XPOINT_BASE_L		0x0000	/* + 0x34*pair + idx_l */
+#define BF_REG_XPOINT_BASE_R		0x001a	/* + 0x34*pair + idx_r */
+#define BF_REG_XPOINT_STRIDE		0x0034
+/* The AN1/2 block, for the features that only reach that output. */
+#define BF_REG_LOWMAP_BASE_L		BF_REG_XPOINT_BASE_L
+#define BF_REG_LOWMAP_BASE_R		BF_REG_XPOINT_BASE_R
 #define BF_REG_KEEPALIVE_SETTINGS	0x05cf
 #define BF_REG_RATE_FAMILY		0x0030	/* family << 4 (bReq 0x10) */
 /* 0x05ff = 0x05cf | 0x0030: the settings word and the family register
@@ -299,9 +302,8 @@ struct bf_source {
 	u8 idx_r;
 };
 
-/* Crosspoint-source order + register block maps (babyfacepro-ctl.c). */
+/* Crosspoint-source order (babyfacepro-ctl.c). */
 extern const struct bf_source bf_sources[14];
-extern const u8 bf_xpoint_block[6];
 
 /* The first playback source in bf_sources[]: the four analog inputs, the
  * optical input and the three ADAT pairs come first, the six playback
@@ -530,7 +532,6 @@ void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 void bf_eq_reupload(struct snd_usb_babyface *chip);
 void bf_eq_defaults(struct snd_usb_babyface *chip);
 int babyface_create_eq(struct snd_usb_babyface *chip);
-extern const u8 bf_xpoint_block[6];
 extern const struct snd_pcm_hw_constraint_list bf_rates_constraint;
 
 /* babyfacepro.c */
@@ -542,7 +543,7 @@ int bf_vendor_write_cycle(struct snd_usb_babyface *chip, u8 req, u16 val, u16 id
 int bf_vendor_read(struct snd_usb_babyface *chip, u8 req, u16 idx, u8 *buf);
 int bf_cold_init(struct snd_usb_babyface *chip);
 int bf_crosspoint_clear_cross(struct snd_usb_babyface *chip,
-			      unsigned int blk);
+			      unsigned int pair);
 const struct bf_rate *bf_rate_lookup(unsigned int rate);
 void babyface_stream_kill(struct snd_usb_babyface *chip);
 void babyface_pcm_stop_both(struct snd_usb_babyface *chip, snd_pcm_state_t state);
