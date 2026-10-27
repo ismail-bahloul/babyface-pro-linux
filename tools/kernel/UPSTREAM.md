@@ -569,6 +569,15 @@ lists are busy; keep the series ready and go in as a direct submission
 when the time comes.  Before submitting, rebase onto the then-current
 linux-next and regenerate the patches; the rest is done.
 
+Tagged `[PATCH v7 0/8]`, not `[RFC PATCH v7 0/8]` as v3 to v6 were.
+That follows from the decision above: an RFC is the wrapper for a design
+round, and those rounds are over - the split Takashi asked for has been
+in place since v5 and the open points are documented and non-blocking.
+The eight patches were already `[PATCH v7 n/8]`, so the cover was also
+the one message out of nine carrying the tag.  The cover says in one
+line that this is not an RFC, so the change is visible rather than
+silent.
+
 ## v6 - SENT 2026-10-03 (re-cut on next-20261002)
 
 Sent 2026-10-03 21:31 (cover Message-ID 20261003193125.82085-1, archived at
