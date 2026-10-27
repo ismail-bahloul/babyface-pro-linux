@@ -82,10 +82,19 @@ and no warnings.  checkpatch --strict reports no errors; the known
 false positives are the same as v7 ('ang' for the CORDIC angle, and the
 MAINTAINERS note on the patches that add files).
 
-TODO(hardware): the three audibly changed paths still need the unit
-pass: the DIM/mute/volume matrix, the width replay across a resume,
-and the MIX wheel from a muted input.  Fill this section with the
-regress.sh result and the three checks before sending.
+Validated on the unit with this tree:
+
+ - regress.sh --mixer-restore --disconnect-test passes 41/41: the
+   full-duplex sweep of the nine rates at periods 256 to 2048 with no
+   xruns, runtime renegotiation, 30 start/stop cycles, the mixer state
+   restored across an unbind/rebind, and an unbind in the middle of a
+   capture.
+
+TODO(hardware): three checks need the wheel and an ear before this is
+sent: the DIM/mute/volume matrix (volume and mute while DIM is on,
+unmute while DIM is on, OUT wheel while DIM is on), the width replay
+across a resume with a mic on AN1, and the MIX wheel from a muted
+input (one click up, one click down at the steps that used to stick).
 
 Known limitations, unchanged from v7:
 
