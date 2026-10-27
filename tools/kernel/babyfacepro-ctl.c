@@ -3368,7 +3368,7 @@ void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 		      s32 gain_x10, s32 fs)
 {
 	s64 f = freq_hz;
-	s64 w0, c, s, alpha, A, sq;
+	s64 w0, c, s, u, su, cu, alpha, A, sq;
 	s64 b0, b1, b2, a0, a1, a2;
 	s64 pi = 0x1921FB54;	/* pi, Q27 */
 	s64 hpi = 0xC90FDAA;	/* pi/2, Q27 */
@@ -3413,7 +3413,21 @@ void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 	if (cflip)
 		c = -c;
 
-	alpha = div64_s64(s * 100 + q100, 2 * (s64)q100);	/* sin(w0)/(2Q) */
+	/* alpha = sin(w0 / (2Q)), the way TotalMix computes it, not the
+	 * cookbook's sin(w0) / (2Q): the two agree where w0 is small and
+	 * part ways as it grows, which is the effective Q that shrinks above
+	 * a few kHz in the captures (tools/usbdump/eq_biquad.md).  Checked
+	 * for Q 0.7 to 5 up to 16 kHz.  The angle is held to pi/2: past it
+	 * sin() falls again, and towards pi it would make a vanishing alpha,
+	 * a resonance with its poles on the unit circle.  It only matters for
+	 * a low Q at a high frequency (below Q 1, w0 > pi.Q), where the band
+	 * is as wide as it gets.
+	 */
+	u = div64_s64(w0 * 100 + q100, 2 * (s64)q100);
+	if (u > hpi)
+		u = hpi;
+	bf_sincos(u, &su, &cu);
+	alpha = su;
 	/* A = 10^(g/40), sqrt(A): g = gain_x10/10 dB */
 	A = bf_exp2((s64)gain_x10 * 0x11021E);
 	sq = bf_exp2((s64)gain_x10 * 0x8810F);

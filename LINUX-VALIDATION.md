@@ -367,13 +367,14 @@ H(z) = c4·(1 + c2·z⁻¹ + c3·z⁻²) / (1 + c0·z⁻¹ + c1·z⁻²)
 ```
 
 ′ = normalized by a0; stored word = value ×2²⁷ (signed i32). BELL =
-exact RBJ peaking (A = 10^(dB/40), α = sin(w0)/(2Q), fs 48 k); 0 dB =
+RBJ peaking (A = 10^(dB/40), α = sin(w0/(2Q)) since 2026-10-26, it was
+read as sin(w0)/(2Q); fs 48 k); 0 dB =
 identity [0,0,0,0, 0x08000000]; gain sign flip mirrors c0↔c2, c1↔c3.
 **Verified to ~1 LSB**: cap_eq8c gain sweep peaks/notches at EXACTLY
 200 Hz with EXACTLY the labeled gain (±0.000 dB), DC/Nyquist = 0 dB;
 cap_eq8b Q sweep +6.000 dB @ 200 Hz for every Q. cap_eq8a freq sweep
-matches ~1e-7 at low freq, drifting to ~1e-2 at 10 kHz (mild warping
-detail still open — see eq_biquad.md).
+matches ~1e-7 at low freq, drifting to ~1e-2 at 10 kHz (explained since
+2026-10-26: α = sin(w0/(2Q)) — see eq_biquad.md).
 
 **LOW CUT — FORMULA DECODED 2026-08-24.** `0x38 = round(K·f/(1+c·f))`
 with K = 11508, c = 1/11656 (all 9 cap_eq9 labeled points to ≤0.003%).
@@ -398,7 +399,8 @@ phones, and walks 6 ear-check steps: baseline, +6/−6 dB Low bell @
 band states are the EXACT captured cap_eq8c values, so a correct
 upload must reproduce the audibly verified TotalMix sound. Also: the
 2-bands-simultaneous c4@0x34 sharing (cap_eq8e — the c4 follows the
-last-written band; exact DSP behavior open) and the high-freq warping.
+last-written band; exact DSP behavior open) and the high-freq warping
+(resolved 2026-10-26, see §10).
 
 **✅ VALIDATED on hardware 2026-08-24** (user, by ear, mic on AN1 +
 Fethead, masters at -30 dB): every step reproduced the expected sound
@@ -528,8 +530,8 @@ gain in split mode). The Linux silence was the STEREO-LINK handling:
    streams, routes AN1 (48V + 35 dB) to the phones, walks the
    ear-check steps (baseline, ±6 dB Low bell @ 200 Hz, +10 dB @ 4
    kHz, low cut 100 Hz @ 12 dB/oct, off). See §10 for the formula
-   and the open refinements (2-band c4@0x34 sharing, high-freq
-   warping, shelf exact variant).
+   and the open refinements (2-band c4@0x34 sharing, shelf exact variant;
+   the high-freq warping is resolved, see eq_biquad.md).
 2. **Validate the set_loopback fix**: OFF now clears all 30 channels
    (TotalMix behavior, cap_loopback_off.pcap — the capture CONFIRMS:
    TotalMix always writes the FULL 30-channel map on every toggle).
