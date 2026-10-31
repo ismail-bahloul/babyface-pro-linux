@@ -806,19 +806,22 @@ out:
 
 /* Stereo split (PROTOCOL.md "Stereo split", cap_ctrl3.pcap, hardware-
  * verified): a playback pair's signal into the AN1/2 monitor bus goes
- * hard-split (L=0x2000/R=0x0000, "split-mono") instead of the normal
- * stereo pair (L=R=0x1000, -6 dB each side) - fixed constants, not
- * derived from the current fader value (unlike Phase, there's nothing
- * to preserve), matching TuxMix's own `usb.rs::set_stereo_split`
- * exactly. Only reaches the AN1/2 destination (its block of the map),
- * the same scope as CUE/mute/solo. `chip->xpoint[][]` is deliberately
- * left untouched, same reasoning as Phase.
+ * hard-split (L=0x2000/R=0x0000, "split-mono").  Only reaches the AN1/2
+ * destination (its block of the map), the same scope as CUE/mute/solo.
+ * `chip->xpoint[][]` is deliberately left untouched, same reasoning as
+ * Phase.
+ *
+ * Joining the pair again puts back the pair's own AN1/2 crosspoint from
+ * the cache.  It used to write L=R=0x1000, read as "-6 dB per side",
+ * which issue #31 found to be 6 dB below what TotalMix FX writes for a
+ * joined pair at 0 dB (0x2000 per side), and which also dropped
+ * whatever level the user had set on that crosspoint.
  */
 int bf_split_apply(struct snd_usb_babyface *chip, int pb, bool split)
 {
 	const struct bf_source *s = &bf_sources[8 + pb];
-	u16 l = split ? 0x2000 : 0x1000;
-	u16 r = split ? 0x0000 : 0x1000;
+	u16 l = split ? 0x2000 : chip->xpoint[0][8 + pb][0];
+	u16 r = split ? 0x0000 : chip->xpoint[0][8 + pb][1];
 	int ret;
 
 	/* The AN1/2 block.  The same values also went to a "standard map"
