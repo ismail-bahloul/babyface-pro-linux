@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * RME Babyface Pro FS - proprietary-mode USB audio driver
+ * RME Babyface Pro / Pro FS - proprietary-mode USB audio driver
  *
- * ALSA control surface: mixer (masters, preamp, crosspoints, flags,
- * gains), front-panel poll + controls, and the hardware DSP EQ
+ * ALSA control surface: the hardware mixer (output masters and mutes,
+ * the crosspoint matrix, preamps, routing flags, varispeed pitch),
+ * the front-panel poll and controls, and the hardware DSP EQ
  * (3-band + low cut).
  *
  * See babyfacepro.h for the shared device state and register map,
@@ -14,7 +15,7 @@
 #include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
-#include <linux/slab.h>
+#include <linux/string.h>
 #include <linux/unaligned.h>
 #include <linux/usb.h>
 #include <linux/workqueue.h>
@@ -25,6 +26,55 @@
 #include <sound/pcm.h>
 
 #include "babyfacepro.h"
+
+/* The flag-cycle counter, its writer and the per-block crosspoint
+ * "cross" register clear are crosspoint/mixer-only, so they live here
+ * rather than in the core driver file.
+ */
+
+/* The transaction-flag counter cycle on 16-bit writes. */
+const u16 bf_flag_cycle[4] = { 0xc000, 0x4000, 0x8000, 0x0000 };
+
+/* Write with the per-transaction flag-cycle word OR'd into idx.  The
+ * device wants the flag word (0xc000/0x4000/0x8000/0x0000, rotating)
+ * set on every 0x12/0x1a write; this is the hot path for the mixer
+ * puts, so it is factored out.
+ */
+int bf_vendor_write_cycle(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx)
+{
+	u16 flag = bf_flag_cycle[chip->flag_cnt];
+
+	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
+	return bf_vendor_write(chip, req, val, idx | flag);
+}
+
+/* The 0x16 cold-init clear covers only 0x00-0x3D - the "cross"
+ * registers of a block (L-reg odd / R-reg even of the stereo
+ * sources) survive from the previous session and would sum L+R into
+ * BOTH channels of the output (mono).  Zero them explicitly: 10 odd
+ * L-registers (5,7,...23) + 10 even R-registers (4,6,...22).
+ */
+int bf_crosspoint_clear_cross(struct snd_usb_babyface *chip,
+			      unsigned int pair)
+{
+	int ret, k;
+
+	for (k = BF_CROSS_L_FIRST; k <= BF_CROSS_L_LAST; k += 2) {
+		ret = bf_vendor_write_cycle(chip, BF_REQ_CROSSPOINT, 0x0000,
+					    BF_REG_XPOINT_BASE_L +
+					    BF_REG_XPOINT_STRIDE * pair + k);
+		if (ret < 0)
+			return ret;
+	}
+	for (k = BF_CROSS_R_FIRST; k <= BF_CROSS_R_LAST; k += 2) {
+		ret = bf_vendor_write_cycle(chip, BF_REQ_CROSSPOINT, 0x0000,
+					    BF_REG_XPOINT_BASE_R +
+					    BF_REG_XPOINT_STRIDE * pair + k);
+		if (ret < 0)
+			return ret;
+	}
+	return 0;
+}
 
 const struct bf_source bf_sources[14] = {
 	{ "AN1",     0,  0 },
@@ -281,6 +331,33 @@ static int bf_master_get(struct snd_kcontrol *kctl,
 	return 0;
 }
 
+/* The master step to put on the wire.  The cache keeps the real
+ * volume: mute wins, and DIM is the fixed -20 dB step on the Phones
+ * pair, so every writer derives the wire value the same way.
+ */
+/* The two master registers to put on the wire.  The cache keeps the
+ * real volume: mute wins, and DIM is the exact -20 dB pair the
+ * hardware's own button writes (0xcb / 0x0333, cap_dim2.pcap), not the
+ * master curve's value at that step.
+ */
+static u8 bf_out_reg8(bool muted, bool dim, u16 step)
+{
+	if (muted)
+		return BF_MASTER_MUTE;
+	if (dim)
+		return BF_MASTER_MINUS20_8;
+	return bf_master_reg8(step);
+}
+
+static u16 bf_out_reg16(bool muted, bool dim, u16 step)
+{
+	if (muted)
+		return 0;
+	if (dim)
+		return BF_MASTER_MINUS20_16;
+	return bf_master_reg16(step);
+}
+
 static int bf_master_put(struct snd_kcontrol *kctl,
 			 struct snd_ctl_elem_value *ucontrol)
 {
@@ -288,7 +365,8 @@ static int bf_master_put(struct snd_kcontrol *kctl,
 	int out = bf_master_out[kctl->private_value];
 	long nl = ucontrol->value.integer.value[0];
 	long nr = ucontrol->value.integer.value[1];
-	u16 l, r, wire_l, wire_r, flag;
+	bool muted, dim;
+	u16 l, r, flag;
 	int ret = 0;
 
 	/* Reject anything outside the declared range, so the registers and
@@ -306,27 +384,29 @@ static int bf_master_put(struct snd_kcontrol *kctl,
 	if (l == chip->master[out][0] && r == chip->master[out][1])
 		goto out;
 
-	wire_l = chip->muted[out] ? 0 : l;
-	wire_r = chip->muted[out] ? 0 : r;
+	muted = chip->muted[out];
+	dim = out == 1 && chip->dim;
 	flag = bf_flag_cycle[chip->flag_cnt];
 	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 
 	/* Both registers, as TotalMix writes them: the 8-bit is the analog
 	 * level, the 16-bit the digital one.
 	 */
-	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wire_l),
+	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, l),
 			      BF_REG_MASTER_8 + 2 * out);
 	if (ret < 0)
 		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wire_r),
+	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, r),
 			      BF_REG_MASTER_8 + 2 * out + 1);
 	if (ret < 0)
 		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wire_l),
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+			      bf_out_reg16(muted, dim, l),
 			      (BF_REG_MASTER_16 + 2 * out) | flag);
 	if (ret < 0)
 		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wire_r),
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+			      bf_out_reg16(muted, dim, r),
 			      (BF_REG_MASTER_16 + 2 * out + 1) | flag);
 	if (ret < 0)
 		goto out;
@@ -348,7 +428,10 @@ static int bf_mute_info(struct snd_kcontrol *kctl,
 			struct snd_ctl_elem_info *uinfo)
 {
 	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 2;
+	/* One switch for the pair: bf_mute_put() writes both channels
+	 * together, so a count of 2 would silently ignore value[1].
+	 */
+	uinfo->count = 1;
 	uinfo->value.integer.min = 0;
 	uinfo->value.integer.max = 1;
 	return 0;
@@ -372,6 +455,7 @@ static int bf_mute_put(struct snd_kcontrol *kctl,
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
 	int out = bf_master_out[kctl->private_value];
 	bool muted = !ucontrol->value.integer.value[0];
+	bool dim;
 	u16 flag;
 	int ret = 0;
 
@@ -379,51 +463,33 @@ static int bf_mute_put(struct snd_kcontrol *kctl,
 	if (muted == chip->muted[out])
 		goto out;
 
+	dim = out == 1 && chip->dim;
 	flag = bf_flag_cycle[chip->flag_cnt];
 	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 
-	if (muted) {
-		ret = bf_vendor_write(chip, BF_REQ_GAIN, BF_MASTER_MUTE,
-				      BF_REG_MASTER_8 + 2 * out);
-		if (ret < 0)
-			goto out;
-		ret = bf_vendor_write(chip, BF_REQ_GAIN, BF_MASTER_MUTE,
-				      BF_REG_MASTER_8 + 2 * out + 1);
-		if (ret < 0)
-			goto out;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000,
-				      (BF_REG_MASTER_16 + 2 * out) | flag);
-		if (ret < 0)
-			goto out;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000,
-				      (BF_REG_MASTER_16 + 2 * out + 1) | flag);
-		if (ret < 0)
-			goto out;
-	} else {
-		/* Unmute restores the cached volume (TotalMix keeps the
-		 * pre-mute fader value host-side), 8-bit + 16-bit.
-		 */
-		ret = bf_vendor_write(chip, BF_REQ_GAIN,
-				      bf_master_reg8(chip->master[out][0]),
-				      BF_REG_MASTER_8 + 2 * out);
-		if (ret < 0)
-			goto out;
-		ret = bf_vendor_write(chip, BF_REQ_GAIN,
-				      bf_master_reg8(chip->master[out][1]),
-				      BF_REG_MASTER_8 + 2 * out + 1);
-		if (ret < 0)
-			goto out;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				      bf_master_reg16(chip->master[out][0]),
-				      (BF_REG_MASTER_16 + 2 * out) | flag);
-		if (ret < 0)
-			goto out;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				      bf_master_reg16(chip->master[out][1]),
-				      (BF_REG_MASTER_16 + 2 * out + 1) | flag);
-		if (ret < 0)
-			goto out;
-	}
+	/* TotalMix keeps the pre-mute fader value host-side, so unmute
+	 * restores it; mute is the 8-bit mute code and a zero 16-bit.
+	 */
+	ret = bf_vendor_write(chip, BF_REQ_GAIN,
+			      bf_out_reg8(muted, dim, chip->master[out][0]),
+			      BF_REG_MASTER_8 + 2 * out);
+	if (ret < 0)
+		goto out;
+	ret = bf_vendor_write(chip, BF_REQ_GAIN,
+			      bf_out_reg8(muted, dim, chip->master[out][1]),
+			      BF_REG_MASTER_8 + 2 * out + 1);
+	if (ret < 0)
+		goto out;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+			      bf_out_reg16(muted, dim, chip->master[out][0]),
+			      (BF_REG_MASTER_16 + 2 * out) | flag);
+	if (ret < 0)
+		goto out;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+			      bf_out_reg16(muted, dim, chip->master[out][1]),
+			      (BF_REG_MASTER_16 + 2 * out + 1) | flag);
+	if (ret < 0)
+		goto out;
 	chip->muted[out] = muted;
 	ret = 1;
 out:
@@ -431,29 +497,10 @@ out:
 	return ret;
 }
 
-int bf_preamp_state_write(struct snd_usb_babyface *chip)
-{
-	int ret;
-
-	ret = bf_vendor_write(chip, BF_REQ_PREAMP, chip->preamp, BF_REG_PREAMP);
-	if (ret < 0)
-		return ret;
-	/* Boost's 0x21 commit value (0x0003) is NOT a persisted register
-	 * bit - PROTOCOL.md's "Ref level" section found it only in the
-	 * one-shot 0x21 value alongside the 0x17 state write, so it has
-	 * to be re-sent alongside EVERY preamp write (phantom/PAD toggles
-	 * included), or Boost would silently degrade to plain -10dBV the
-	 * next time anything else touches this shared byte.
-	 */
-	return bf_vendor_write(chip, BF_REQ_PREAMP_COMMIT,
-			       chip->ref_level == BF_REF_LEVEL_BOOST ?
-			       0x0003 : 0x0000, 0x0000);
-}
-
 /* The crosspoint fader is linear in amplitude: BF_FADER_0DB (0x16a0) is
- * unity and BF_FADER_TOP (0x2d41) is exactly twice that, i.e. +6 dB - see
- * bf_fader_curve, whose whole span follows raw = BF_FADER_0DB * 10^(dB/20).
- * Raw 0 is off.
+ * unity and BF_FADER_TOP (0x2d41) is exactly twice that, i.e. +6 dB; the
+ * whole fader span follows raw = BF_FADER_0DB * 10^(dB/20).  Raw 0 is
+ * off.
  */
 static const DECLARE_TLV_DB_LINEAR(bf_xpoint_tlv, TLV_DB_GAIN_MUTE, 600);
 
@@ -553,6 +600,119 @@ out:
 	return ret;
 }
 
+int babyface_create_xpoints(struct snd_usb_babyface *chip)
+{
+	struct snd_kcontrol *kctl;
+	int out, src, err;
+
+	for (out = 0; out < 6; out++) {
+		for (src = 0; src < 14; src++) {
+			kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+				.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+				.name = "Playback Volume",
+				.index = out * 14 + src,
+				.access = SNDRV_CTL_ELEM_ACCESS_READWRITE |
+					  SNDRV_CTL_ELEM_ACCESS_TLV_READ,
+				.info = bf_xpoint_info,
+				.get = bf_xpoint_get,
+				.put = bf_xpoint_put,
+				.tlv.p = bf_xpoint_tlv,
+				.private_value = (out << 8) | src,
+			}, chip);
+			if (!kctl)
+				return -ENOMEM;
+			/* Name the control by its source: "AN1 Playback Volume",
+			 * "PB1 Playback Volume"... with a unique index.
+			 */
+			strscpy(kctl->id.name, bf_sources[src].name,
+				sizeof(kctl->id.name));
+			strlcat(kctl->id.name, " Playback Volume",
+				sizeof(kctl->id.name));
+			err = snd_ctl_add(chip->card, kctl);
+			if (err < 0)
+				return err;
+			chip->xpoint_kctl[out][src] = kctl;
+		}
+	}
+
+	return 0;
+}
+
+int babyface_create_masters(struct snd_usb_babyface *chip)
+{
+	static const char * const out_names[6] = {
+		"AN1/2", "PH3/4", "AS1/2", "ADAT3/4", "ADAT5/6", "ADAT7/8"
+	};
+	struct snd_kcontrol *kctl;
+	int i, err;
+
+	for (i = 0; i < 6; i++) {
+		kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+			.name = out_names[i],
+			.index = i,
+			.access = SNDRV_CTL_ELEM_ACCESS_READWRITE |
+				  SNDRV_CTL_ELEM_ACCESS_TLV_READ,
+			.info = bf_master_info,
+			.get = bf_master_get,
+			.put = bf_master_put,
+			.tlv.p = bf_master_tlv,
+			.private_value = i,
+		}, chip);
+		if (!kctl)
+			return -ENOMEM;
+		strlcat(kctl->id.name, " Playback Volume", sizeof(kctl->id.name));
+		err = snd_ctl_add(chip->card, kctl);
+		if (err < 0)
+			return err;
+		chip->master_kctl[i] = kctl;
+
+		kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+			.name = out_names[i],
+			.index = i,
+			.info = bf_mute_info,
+			.get = bf_mute_get,
+			.put = bf_mute_put,
+			.private_value = i,
+		}, chip);
+		if (!kctl)
+			return -ENOMEM;
+		strlcat(kctl->id.name, " Playback Switch", sizeof(kctl->id.name));
+		err = snd_ctl_add(chip->card, kctl);
+		if (err < 0)
+			return err;
+
+		dev_dbg(&chip->dev->dev, "output %d = %s\n", i, out_names[i]);
+	}
+
+	return 0;
+}
+
+/* Boost's 0x21 commit value (0x0003) is NOT a persisted register bit -
+ * PROTOCOL.md's "Ref level" section found it only in the one-shot 0x21
+ * value alongside the 0x17 state write, so it has to be re-sent
+ * alongside EVERY preamp write (phantom/PAD toggles, AN 1>2, link and
+ * the state replay included), or Boost would silently degrade to plain
+ * -10dBV the next time anything else touches this shared byte.
+ */
+int bf_preamp_commit(struct snd_usb_babyface *chip)
+{
+	return bf_vendor_write(chip, BF_REQ_PREAMP_COMMIT,
+			       chip->ref_level == BF_REF_LEVEL_BOOST ?
+			       0x0003 : 0x0000, 0x0000);
+}
+
+int bf_preamp_state_write(struct snd_usb_babyface *chip)
+{
+	int ret;
+
+	ret = bf_vendor_write(chip, BF_REQ_PREAMP, chip->preamp, BF_REG_PREAMP);
+	if (ret < 0)
+		return ret;
+	return bf_preamp_commit(chip);
+}
+
 /* Phase (polarity) invert (AN1-4 only, PROTOCOL.md "Phase toggle",
  * hardware-verified 2026-08-23): NEGATE (bitwise NOT, not two's
  * complement) the L crosspoint register on every output pair's
@@ -646,19 +806,22 @@ out:
 
 /* Stereo split (PROTOCOL.md "Stereo split", cap_ctrl3.pcap, hardware-
  * verified): a playback pair's signal into the AN1/2 monitor bus goes
- * hard-split (L=0x2000/R=0x0000, "split-mono") instead of the normal
- * stereo pair (L=R=0x1000, -6 dB each side) - fixed constants, not
- * derived from the current fader value (unlike Phase, there's nothing
- * to preserve), matching TuxMix's own `usb.rs::set_stereo_split`
- * exactly. Only reaches the AN1/2 destination (its block of the map),
- * the same scope as CUE/mute/solo. `chip->xpoint[][]` is deliberately
- * left untouched, same reasoning as Phase.
+ * hard-split (L=0x2000/R=0x0000, "split-mono").  Only reaches the AN1/2
+ * destination (its block of the map), the same scope as CUE/mute/solo.
+ * `chip->xpoint[][]` is deliberately left untouched, same reasoning as
+ * Phase.
+ *
+ * Joining the pair again puts back the pair's own AN1/2 crosspoint from
+ * the cache.  It used to write L=R=0x1000, read as "-6 dB per side",
+ * which issue #31 found to be 6 dB below what TotalMix FX writes for a
+ * joined pair at 0 dB (0x2000 per side), and which also dropped
+ * whatever level the user had set on that crosspoint.
  */
 int bf_split_apply(struct snd_usb_babyface *chip, int pb, bool split)
 {
 	const struct bf_source *s = &bf_sources[8 + pb];
-	u16 l = split ? 0x2000 : 0x1000;
-	u16 r = split ? 0x0000 : 0x1000;
+	u16 l = split ? 0x2000 : chip->xpoint[0][8 + pb][0];
+	u16 r = split ? 0x0000 : chip->xpoint[0][8 + pb][1];
 	int ret;
 
 	/* The AN1/2 block.  The same values also went to a "standard map"
@@ -704,17 +867,82 @@ out:
 	return ret;
 }
 
-/* bf_fader_raw_to_db2()/bf_fader_db2_to_raw() (the crosspoint fader
- * curve) are defined further down in this file, alongside the
- * front-panel wheel code that was their first user - forward-declared
- * here rather than moved, to keep this diff to additions only.
+/* MIX-mode monitoring level (fader curve).
+ * Calibrated crosspoint-fader curve (AN1->AN1/2, cap_calib.pcap
+ * 2026-08-22; the same table as tuxmix-core/src/usb.rs FADER_CURVE).
+ * dB stored x2 (half-dB grid): the MIX wheel steps +/-0.5 dB per click
+ * on this curve (cap_mix.pcap).  0x0000 = -inf (digital mute),
+ * 0x0003 = -62 dB, ... 0x2D41 = +6 dB.  Raw values interpolate linearly
+ * between the 1-dB points.
  */
-static int bf_fader_raw_to_db2(u16 raw);
-static u16 bf_fader_db2_to_raw(int db2);
+#define BF_FADER_DB2_INF	(-130)	/* -65 dB = the wheel's -inf floor */
 
-static int bf_trim_info(struct snd_kcontrol *kctl, struct snd_ctl_elem_info *uinfo);
-static int bf_trim_get(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol);
-static int bf_trim_put(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol);
+static const struct bf_fader_pt {
+	s16 db2;	/* dB x 2 */
+	u16 raw;
+} bf_fader_curve[] = {
+	{ -124, 0x0003 }, { -122, 0x0004 }, { -120, 0x0005 },
+	{ -118, 0x0006 }, { -116, 0x0007 }, { -114, 0x0008 },
+	{ -112, 0x0009 }, { -110, 0x000a }, { -108, 0x000b },
+	{ -106, 0x000d }, { -104, 0x000e }, { -102, 0x0010 },
+	{ -100, 0x0012 }, {  -98, 0x0014 }, {  -96, 0x0017 },
+	{  -94, 0x0019 }, {  -92, 0x001d }, {  -90, 0x0020 },
+	{  -88, 0x0024 }, {  -86, 0x0029 }, {  -84, 0x002e },
+	{  -82, 0x0033 }, {  -80, 0x003a }, {  -78, 0x0041 },
+	{  -76, 0x0049 }, {  -74, 0x0051 }, {  -72, 0x005b },
+	{  -70, 0x0067 }, {  -68, 0x0073 }, {  -66, 0x0081 },
+	{  -64, 0x0091 }, {  -62, 0x00a3 }, {  -60, 0x00b7 },
+	{  -58, 0x00cd }, {  -56, 0x00e6 }, {  -54, 0x0102 },
+	{  -52, 0x0122 }, {  -50, 0x0145 }, {  -48, 0x016d },
+	{  -46, 0x019a }, {  -44, 0x01cc }, {  -42, 0x0204 },
+	{  -40, 0x0243 }, {  -38, 0x028a }, {  -36, 0x02d9 },
+	{  -34, 0x0332 }, {  -32, 0x0396 }, {  -30, 0x0406 },
+	{  -28, 0x0483 }, {  -26, 0x0510 }, {  -24, 0x05af },
+	{  -22, 0x0660 }, {  -20, 0x0727 }, {  -18, 0x0807 },
+	{  -16, 0x0902 }, {  -14, 0x0a1b }, {  -12, 0x0b57 },
+	{  -10, 0x0cb9 }, {   -8, 0x0e47 }, {   -6, 0x1004 },
+	{   -4, 0x11f9 }, {   -2, 0x142a }, {    0, 0x16a0 },
+	{    2, 0x1963 }, {    4, 0x1c7c }, {    6, 0x1ff6 },
+	{    8, 0x23dc }, {   10, 0x283d }, {   12, 0x2d41 },
+};
+
+/* Fader raw -> dBx2 (linear interpolation; raw 0 = -inf). */
+static int bf_fader_raw_to_db2(u16 raw)
+{
+	int i;
+
+	if (raw == 0 || raw < bf_fader_curve[0].raw)
+		return BF_FADER_DB2_INF;
+	for (i = 0; i < ARRAY_SIZE(bf_fader_curve) - 1; i++) {
+		if (raw <= bf_fader_curve[i + 1].raw) {
+			u32 num = (u32)(raw - bf_fader_curve[i].raw) *
+				  (u32)(bf_fader_curve[i + 1].db2 - bf_fader_curve[i].db2);
+			u32 den = bf_fader_curve[i + 1].raw - bf_fader_curve[i].raw;
+
+			return bf_fader_curve[i].db2 + (int)((num + den / 2) / den);
+		}
+	}
+	return bf_fader_curve[ARRAY_SIZE(bf_fader_curve) - 1].db2;
+}
+
+/* dBx2 -> fader raw (linear interpolation; below -62 dB = mute 0). */
+static u16 bf_fader_db2_to_raw(int db2)
+{
+	int i;
+
+	if (db2 <= bf_fader_curve[0].db2)
+		return db2 < bf_fader_curve[0].db2 ? 0 : bf_fader_curve[0].raw;
+	for (i = 0; i < ARRAY_SIZE(bf_fader_curve) - 1; i++) {
+		if (db2 <= bf_fader_curve[i + 1].db2) {
+			u32 num = (u32)(db2 - bf_fader_curve[i].db2) *
+				  (u32)(bf_fader_curve[i + 1].raw - bf_fader_curve[i].raw);
+			u32 den = bf_fader_curve[i + 1].db2 - bf_fader_curve[i].db2;
+
+			return bf_fader_curve[i].raw + (u16)((num + den / 2) / den);
+		}
+	}
+	return bf_fader_curve[ARRAY_SIZE(bf_fader_curve) - 1].raw;
+}
 
 /* Input Trim (T button, AN1-4): PROTOCOL.md "Trim (T) write for the
  * AN1/2 pair" (cap_trim2/3/4.pcap, hardware-verified) - the analog
@@ -824,38 +1052,15 @@ out:
 	return ret;
 }
 
-int babyface_create_xpoints(struct snd_usb_babyface *chip)
+/* Phase, stereo split and input trim - registered together since all
+ * three are per-input-strip controls layered on the same AN1/2 monitor
+ * bus crosspoint registers the matrix in babyface_create_xpoints()
+ * already created controls for.
+ */
+int babyface_create_trim(struct snd_usb_babyface *chip)
 {
 	struct snd_kcontrol *kctl;
-	int out, src, err;
-
-	for (out = 0; out < 6; out++) {
-		for (src = 0; src < 14; src++) {
-			kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-				.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-				.name = "Playback Volume",
-				.index = out * 14 + src,
-				.access = SNDRV_CTL_ELEM_ACCESS_READWRITE |
-					  SNDRV_CTL_ELEM_ACCESS_TLV_READ,
-				.info = bf_xpoint_info,
-				.get = bf_xpoint_get,
-				.put = bf_xpoint_put,
-				.tlv.p = bf_xpoint_tlv,
-				.private_value = (out << 8) | src,
-			}, chip);
-			/* Name the control by its source: "AN1 Playback Volume",
-			 * "PB1 Playback Volume"... with a unique index.
-			 */
-			strscpy(kctl->id.name, bf_sources[src].name,
-				sizeof(kctl->id.name));
-			strlcat(kctl->id.name, " Playback Volume",
-				sizeof(kctl->id.name));
-			err = snd_ctl_add(chip->card, kctl);
-			if (err < 0)
-				return err;
-			chip->xpoint_kctl[out][src] = kctl;
-		}
-	}
+	int src, err;
 
 	for (src = 0; src < 4; src++) {
 		kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
@@ -867,6 +1072,8 @@ int babyface_create_xpoints(struct snd_usb_babyface *chip)
 			.put = bf_phase_put,
 			.private_value = src,
 		}, chip);
+		if (!kctl)
+			return -ENOMEM;
 		strscpy(kctl->id.name, bf_sources[src].name, sizeof(kctl->id.name));
 		strlcat(kctl->id.name, " Phase Switch", sizeof(kctl->id.name));
 		err = snd_ctl_add(chip->card, kctl);
@@ -884,6 +1091,8 @@ int babyface_create_xpoints(struct snd_usb_babyface *chip)
 			.put = bf_split_put,
 			.private_value = src,
 		}, chip);
+		if (!kctl)
+			return -ENOMEM;
 		strscpy(kctl->id.name, bf_sources[8 + src].name, sizeof(kctl->id.name));
 		strlcat(kctl->id.name, " Stereo Split Switch", sizeof(kctl->id.name));
 		err = snd_ctl_add(chip->card, kctl);
@@ -904,709 +1113,15 @@ int babyface_create_xpoints(struct snd_usb_babyface *chip)
 			.tlv.p = bf_trim_tlv,
 			.private_value = src,
 		}, chip);
-		chip->trim_kctl[src] = kctl;
+		if (!kctl)
+			return -ENOMEM;
 		strscpy(kctl->id.name, bf_sources[src].name, sizeof(kctl->id.name));
 		strlcat(kctl->id.name, " Trim Volume", sizeof(kctl->id.name));
 		err = snd_ctl_add(chip->card, kctl);
 		if (err < 0)
 			return err;
+		chip->trim_kctl[src] = kctl;
 	}
-	return 0;
-}
-
-static int bf_switch_info(struct snd_kcontrol *kctl,
-			  struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
-
-static int bf_pitch_info(struct snd_kcontrol *kctl,
-			 struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
-	uinfo->count = 1;
-	uinfo->value.integer.min = -50;		/* -5.0 % */
-	uinfo->value.integer.max = 50;		/* +5.0 % */
-	uinfo->value.integer.step = 1;		/* 0.1 % */
-	return 0;
-}
-
-static int bf_pitch_get(struct snd_kcontrol *kctl,
-			struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-
-	ucontrol->value.integer.value[0] = chip->pitch;
-	return 0;
-}
-
-static int bf_pitch_put(struct snd_kcontrol *kctl,
-			struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-	int p = ucontrol->value.integer.value[0];
-	int ret = 0;
-
-	if (p < -50 || p > 50)
-		return -EINVAL;
-
-	mutex_lock(&chip->mutex);
-	if (p == chip->pitch)
-		goto out;
-
-	/* The DDS quad is a ratio on top of the family rate, the same at
-	 * every sample rate; bf_pitch_write() sends it with the settings
-	 * keepalive that commits it.
-	 */
-	ret = bf_pitch_write(chip, p);
-	if (ret < 0)
-		goto out;
-	chip->pitch = p;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
-}
-
-static int bf_loopback_get(struct snd_kcontrol *kctl,
-			   struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-	int out = kctl->private_value;
-
-	ucontrol->value.integer.value[0] = chip->loopback[out];
-	ucontrol->value.integer.value[1] = chip->loopback[out];
-	return 0;
-}
-
-/* Write the full 30-channel loopback map: pair (2*out, 2*out+1) at
- * `on` (0x0001/0x0000), all other channels cleared - exactly what
- * TotalMix sends on every loopback toggle (cap_loopback2.pcap).  The
- * full-map write is also the reliable OFF (the old per-pair write
- * sometimes failed to disengage on the hardware).
- */
-int bf_loopback_write_map(struct snd_usb_babyface *chip, int out,
-			  bool on)
-{
-	int ch, ret;
-
-	for (ch = 0; ch < BF_LOOPBACK_CHANNELS; ch++) {
-		u16 val = (on && (ch == out * 2 || ch == out * 2 + 1))
-			  ? 0x0001 : 0x0000;
-
-		ret = bf_vendor_write(chip, BF_REQ_LOOPBACK, val, ch);
-		if (ret < 0)
-			return ret;
-	}
-	return 0;
-}
-
-static int bf_loopback_put(struct snd_kcontrol *kctl,
-			   struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-	int out = kctl->private_value;
-	bool on = ucontrol->value.integer.value[0];
-	int ret = 0;
-
-	mutex_lock(&chip->mutex);
-	if (on == chip->loopback[out])
-		goto out;
-	ret = bf_loopback_write_map(chip, out, on);
-	if (ret < 0)
-		goto out;
-	/* Single-active model (TotalMix writes one pair at 0x0001, the
-	 * rest 0x0000): toggling one output clears the others.
-	 */
-	memset(chip->loopback, 0, sizeof(chip->loopback));
-	chip->loopback[out] = on;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
-}
-
-static int bf_an12_get(struct snd_kcontrol *kctl,
-		       struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-
-	ucontrol->value.integer.value[0] = chip->an12;
-	return 0;
-}
-
-static int bf_an12_put(struct snd_kcontrol *kctl,
-		       struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-	bool an12 = ucontrol->value.integer.value[0];
-	u16 v;
-	int ret = 0;
-
-	mutex_lock(&chip->mutex);
-	if (an12 == chip->an12)
-		goto out;
-	v = (chip->linked ? 0x0400 : 0x0000) | (an12 ? 0x1000 : 0x0000);
-	ret = bf_vendor_write(chip, BF_REQ_PREAMP, v, 0x1000);
-	if (ret < 0)
-		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_PREAMP_COMMIT, 0x0000, 0x0000);
-	if (ret < 0)
-		goto out;
-	chip->an12 = an12;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
-}
-
-/* Clock source (PROTOCOL.md "Clock source / no-lock state",
- * hardware-verified 2026-08-22, clktest.c): NOT a register write at
- * all - only the BF_REG_KEEPALIVE_SETTINGS word changes (bit 2 =
- * Optical). Matches the naming TuxMix's ALSA backend already looks
- * for ("Sample Clock Source", the same name found on the stock
- * snd-usb-audio Class-Compliant driver) so it picks this control up
- * with zero changes on that side.
- */
-static const char *const bf_clock_texts[] = {
-	"Internal", "Optical In", NULL
-};
-
-static int bf_clock_info(struct snd_kcontrol *kctl,
-			 struct snd_ctl_elem_info *uinfo)
-{
-	return snd_ctl_enum_info(uinfo, 1, 2, bf_clock_texts);
-}
-
-static int bf_clock_get(struct snd_kcontrol *kctl,
-			struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-
-	ucontrol->value.enumerated.item[0] = chip->clock_optical ? 1 : 0;
-	return 0;
-}
-
-static int bf_clock_put(struct snd_kcontrol *kctl,
-			struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-	bool optical = ucontrol->value.enumerated.item[0] != 0;
-	int ret = 0;
-
-	mutex_lock(&chip->mutex);
-	if (optical == chip->clock_optical)
-		goto out;
-	chip->clock_optical = optical;
-	ret = bf_settings_write(chip);
-	if (ret < 0) {
-		chip->clock_optical = !optical;
-		goto out;
-	}
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
-}
-
-/* Optical Out format: bit 10 of the same BF_REG_KEEPALIVE_SETTINGS
- * word (PROTOCOL.md, LINUX-VALIDATION.md section 7).  The single optical
- * port carries ADAT by default; S/PDIF mode uses only AS1/2.  Like the
- * clock source, this is not a register write of its own.
- */
-static const char *const bf_optical_texts[] = {
-	"ADAT", "S/PDIF", NULL
-};
-
-static int bf_optical_info(struct snd_kcontrol *kctl,
-			   struct snd_ctl_elem_info *uinfo)
-{
-	return snd_ctl_enum_info(uinfo, 1, 2, bf_optical_texts);
-}
-
-static int bf_optical_get(struct snd_kcontrol *kctl,
-			  struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-
-	ucontrol->value.enumerated.item[0] = chip->optical_spdif ? 1 : 0;
-	return 0;
-}
-
-static int bf_optical_put(struct snd_kcontrol *kctl,
-			  struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-	bool spdif = ucontrol->value.enumerated.item[0] != 0;
-	int ret = 0;
-
-	mutex_lock(&chip->mutex);
-	if (spdif == chip->optical_spdif)
-		goto out;
-	chip->optical_spdif = spdif;
-	ret = bf_settings_write(chip);
-	if (ret < 0) {
-		chip->optical_spdif = !spdif;
-		goto out;
-	}
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
-}
-
-static int bf_link_get(struct snd_kcontrol *kctl,
-		       struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-
-	ucontrol->value.integer.value[0] = chip->linked;
-	return 0;
-}
-
-static int bf_link_put(struct snd_kcontrol *kctl,
-		       struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-	bool linked = ucontrol->value.integer.value[0];
-	u16 v;
-	int ret = 0;
-
-	mutex_lock(&chip->mutex);
-	if (linked == chip->linked)
-		goto out;
-	v = (linked ? 0x0400 : 0x0000) | (chip->an12 ? 0x1000 : 0x0000);
-	ret = bf_vendor_write(chip, BF_REQ_PREAMP, v, 0x1000);
-	if (ret < 0)
-		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_PREAMP_COMMIT, 0x0000, 0x0000);
-	if (ret < 0)
-		goto out;
-	chip->linked = linked;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
-}
-
-static int bf_ms_get(struct snd_kcontrol *kctl,
-		     struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-
-	ucontrol->value.integer.value[0] = chip->ms_proc;
-	return 0;
-}
-
-/* MS-proc: engage per the cap_ms2.pcap ON pattern - write 0x0000 to
- * ALL FOUR AN2 (side) crosspoints: standard map 0x0035/0x004F (L/R)
- * + low map 0x0001/0x001B (L/R) - the side path is muted (ear-
- * verified 2026-08-26 with the mic on AN2: MS ON = silence); release
- * restores the cached fader values (host-side, like TotalMix).
- * (The 0x1000/0x0004 writes are the DISENGAGE restore values seen in
- * cap_ms2 - the driver had them inverted on the engage path.)
- */
-static int bf_ms_put(struct snd_kcontrol *kctl,
-		     struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-	bool on = ucontrol->value.integer.value[0];
-	int ret = 0;
-
-	mutex_lock(&chip->mutex);
-	if (on == chip->ms_proc)
-		goto out;
-	if (on) {
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x0035);
-		if (ret < 0)
-			goto out;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x004f);
-		if (ret < 0)
-			goto out;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x0001);
-		if (ret < 0)
-			goto out;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x001b);
-		if (ret < 0)
-			goto out;
-	} else {
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				      chip->xpoint[1][1][0], 0x0001);
-		if (ret < 0)
-			goto out;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				      chip->xpoint[1][1][0], 0x0035);
-		if (ret < 0)
-			goto out;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				      chip->xpoint[1][1][1], 0x001b);
-		if (ret < 0)
-			goto out;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				      chip->xpoint[1][1][1], 0x004f);
-		if (ret < 0)
-			goto out;
-	}
-	chip->ms_proc = on;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
-}
-
-/* DIM - cap_dim2.pcap: an absolute -20 dB on the Phones master
- * (out 1: 8-bit 0xCB / 16-bit 0x0333) regardless of the current level,
- * plus the 0x17 wVal=0x2000 wIdx=0x2000 flag; release restores the
- * pre-DIM master host-side.  The master cache keeps the real volume.
- */
-static int bf_dim_get(struct snd_kcontrol *kctl,
-		      struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-
-	ucontrol->value.integer.value[0] = chip->dim;
-	return 0;
-}
-
-/* Apply DIM on the wire.  chip->mutex must be held by the caller, the
- * "Dim Switch" put.
- */
-static int bf_dim_apply(struct snd_usb_babyface *chip, bool on)
-{
-	u16 flag;
-	int ret;
-
-	lockdep_assert_held(&chip->mutex);
-	if (on) {
-		chip->dim_saved[0] = chip->master[1][0];
-		chip->dim_saved[1] = chip->master[1][1];
-		ret = bf_vendor_write(chip, BF_REQ_GAIN, BF_MASTER_MINUS20_8,
-				      BF_REG_MASTER_8 + 2 * 1);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_GAIN, BF_MASTER_MINUS20_8,
-				      BF_REG_MASTER_8 + 2 * 1 + 1);
-		if (ret < 0)
-			return ret;
-		flag = bf_flag_cycle[chip->flag_cnt];
-		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				      BF_MASTER_MINUS20_16,
-				      (BF_REG_MASTER_16 + 2 * 1) | flag);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				      BF_MASTER_MINUS20_16,
-				      (BF_REG_MASTER_16 + 2 * 1 + 1) | flag);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_PREAMP, 0x2000, 0x2000);
-		if (ret < 0)
-			return ret;
-	} else {
-		ret = bf_vendor_write(chip, BF_REQ_GAIN,
-				      bf_master_reg8(chip->dim_saved[0]),
-				      BF_REG_MASTER_8 + 2 * 1);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_GAIN,
-				      bf_master_reg8(chip->dim_saved[1]),
-				      BF_REG_MASTER_8 + 2 * 1 + 1);
-		if (ret < 0)
-			return ret;
-		flag = bf_flag_cycle[chip->flag_cnt];
-		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				      bf_master_reg16(chip->dim_saved[0]),
-				      (BF_REG_MASTER_16 + 2 * 1) | flag);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				      bf_master_reg16(chip->dim_saved[1]),
-				      (BF_REG_MASTER_16 + 2 * 1 + 1) | flag);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_PREAMP, 0x0000, 0x2000);
-		if (ret < 0)
-			return ret;
-	}
-	chip->dim = on;
-	return 0;
-}
-
-static int bf_dim_put(struct snd_kcontrol *kctl,
-		      struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-	bool on = ucontrol->value.integer.value[0];
-	int ret = 0;
-
-	mutex_lock(&chip->mutex);
-	if (on == chip->dim)
-		goto out;
-	ret = bf_dim_apply(chip, on);
-	if (ret == 0)
-		ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
-}
-
-static int bf_width_info(struct snd_kcontrol *kctl,
-			 struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
-	uinfo->count = 1;
-	uinfo->value.integer.min = -100;
-	uinfo->value.integer.max = 100;
-	uinfo->value.integer.step = 1;
-	return 0;
-}
-
-static int bf_width_get(struct snd_kcontrol *kctl,
-			struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-
-	ucontrol->value.integer.value[0] = chip->width;
-	return 0;
-}
-
-static int bf_width_put(struct snd_kcontrol *kctl,
-			struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-	int w = ucontrol->value.integer.value[0];
-	u16 l, r;
-	int ret = 0;
-
-	if (w < -100 || w > 100)
-		return -EINVAL;
-
-	mutex_lock(&chip->mutex);
-	if (w == chip->width)
-		goto out;
-	/* Width spread: L = 0x1000*(1+w), R = 0x1000*(1-w), L+R = 0x2000.
-	 * TotalMix writes the strip's src pair on BOTH maps (cap_width3-7,
-	 * PROTOCOL.md "Width strip mapping"): the low map (0x0000+src L /
-	 * 0x001A+src R) and the std block-0 map (0x0034+src L /
-	 * 0x004E+src R) - the stereo pair spreads L/R in opposition, the
-	 * mirror src (AN2) gets the swapped values.
-	 */
-	l = (u16)(((0x2000 * (100 + w) / 2) + 50) / 100);
-	r = 0x2000 - l;
-	/* Low map: AN1 L=0x0000, R=0x001A; AN2 L=0x0001, R=0x001B. */
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l, 0x0000);
-	if (ret < 0)
-		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r, 0x001a);
-	if (ret < 0)
-		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r, 0x0001);
-	if (ret < 0)
-		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l, 0x001b);
-	if (ret < 0)
-		goto out;
-	/* Std block-0 map (item 0b, the missing half): AN1 L=0x0034,
-	 * R=0x004E; AN2 L=0x0035, R=0x004F.  (The playback strips PB2-6
-	 * target block n-2 - 0x00AE family - reserved for the per-strip
-	 * controls.)
-	 */
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l, 0x0034);
-	if (ret < 0)
-		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r, 0x004e);
-	if (ret < 0)
-		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r, 0x0035);
-	if (ret < 0)
-		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l, 0x004f);
-	if (ret < 0)
-		goto out;
-	chip->width = w;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
-}
-
-static int bf_fx_send_info(struct snd_kcontrol *kctl,
-			   struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 0x1000;
-	uinfo->value.integer.step = 1;
-	return 0;
-}
-
-static int bf_fx_send_get(struct snd_kcontrol *kctl,
-			  struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-
-	ucontrol->value.integer.value[0] = chip->fx_send;
-	return 0;
-}
-
-static int bf_fx_send_put(struct snd_kcontrol *kctl,
-			  struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-	long nv = ucontrol->value.integer.value[0];
-	u16 v;
-	int ret = 0;
-
-	/* Check before narrowing (a value >= 0x10000 would wrap to a
-	 * passing u16); see bf_master_put().
-	 */
-	if (nv < 0 || nv > 0x1000)
-		return -EINVAL;
-	v = nv;
-
-	mutex_lock(&chip->mutex);
-	if (v == chip->fx_send)
-		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, v, 0x0138);
-	if (ret < 0)
-		goto out;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, v, 0x0153);
-	if (ret < 0)
-		goto out;
-	chip->fx_send = v;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
-}
-
-int babyface_create_flags(struct snd_usb_babyface *chip)
-{
-	struct snd_kcontrol *kctl;
-	int i, err;
-
-	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name = "Varispeed Pitch",
-		.info = bf_pitch_info,
-		.get = bf_pitch_get,
-		.put = bf_pitch_put,
-	}, chip);
-	err = snd_ctl_add(chip->card, kctl);
-	if (err < 0)
-		return err;
-
-	for (i = 0; i < 6; i++) {
-		kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-			.name = "Loopback Switch",
-			.index = i,
-			.info = bf_mute_info,
-			.get = bf_loopback_get,
-			.put = bf_loopback_put,
-			.private_value = i,
-		}, chip);
-		err = snd_ctl_add(chip->card, kctl);
-		if (err < 0)
-			return err;
-	}
-
-	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name = "AN 1>2 Switch",
-		.info = bf_switch_info,
-		.get = bf_an12_get,
-		.put = bf_an12_put,
-	}, chip);
-	err = snd_ctl_add(chip->card, kctl);
-	if (err < 0)
-		return err;
-
-	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name = "Sample Clock Source",
-		.info = bf_clock_info,
-		.get = bf_clock_get,
-		.put = bf_clock_put,
-	}, chip);
-	err = snd_ctl_add(chip->card, kctl);
-	if (err < 0)
-		return err;
-
-	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name = "Optical Out Format",
-		.info = bf_optical_info,
-		.get = bf_optical_get,
-		.put = bf_optical_put,
-	}, chip);
-	err = snd_ctl_add(chip->card, kctl);
-	if (err < 0)
-		return err;
-
-	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name = "AN1/2 Link Switch",
-		.info = bf_switch_info,
-		.get = bf_link_get,
-		.put = bf_link_put,
-	}, chip);
-	err = snd_ctl_add(chip->card, kctl);
-	if (err < 0)
-		return err;
-
-	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name = "MS Processor Switch",
-		.info = bf_switch_info,
-		.get = bf_ms_get,
-		.put = bf_ms_put,
-	}, chip);
-	err = snd_ctl_add(chip->card, kctl);
-	if (err < 0)
-		return err;
-
-	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name = "Dim Switch",
-		.info = bf_switch_info,
-		.get = bf_dim_get,
-		.put = bf_dim_put,
-	}, chip);
-	chip->dim_kctl = kctl;
-	err = snd_ctl_add(chip->card, kctl);
-	if (err < 0)
-		return err;
-
-	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name = "Width",
-		.info = bf_width_info,
-		.get = bf_width_get,
-		.put = bf_width_put,
-	}, chip);
-	err = snd_ctl_add(chip->card, kctl);
-	if (err < 0)
-		return err;
-
-	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name = "FX Send Volume",
-		.info = bf_fx_send_info,
-		.get = bf_fx_send_get,
-		.put = bf_fx_send_put,
-	}, chip);
-	err = snd_ctl_add(chip->card, kctl);
-	if (err < 0)
-		return err;
-
 	return 0;
 }
 
@@ -1636,11 +1151,13 @@ static int bf_phantom_put(struct snd_kcontrol *kctl,
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
 	u16 bit = kctl->private_value;
 	bool on = ucontrol->value.integer.value[0];
-	bool cur = !!(chip->preamp & bit);
-	u16 old = chip->preamp;
+	bool cur;
+	u16 old;
 	int ret = 0;
 
 	mutex_lock(&chip->mutex);
+	cur = !!(chip->preamp & bit);
+	old = chip->preamp;
 	if (on == cur)
 		goto out;
 	chip->preamp = on ? (chip->preamp | bit) : (chip->preamp & ~bit);
@@ -1739,13 +1256,6 @@ int bf_gain_max_db(int mic)
 	return mic < 2 ? BF_GAIN_MAX_DB : 9;
 }
 
-int bf_gain_db(int mic, u8 raw)
-{
-	if (mic >= 2)
-		return raw / 2;
-	return 3 * (raw & BF_GAIN_COARSE_MASK) + (raw >> BF_GAIN_FINE_SHIFT);
-}
-
 u8 bf_gain_raw(int mic, int db)
 {
 	int coarse, fine;
@@ -1816,82 +1326,20 @@ out:
 	return ret;
 }
 
-static int bf_dim_press_info(struct snd_kcontrol *kctl,
-			     struct snd_ctl_elem_info *uinfo)
+/* Preamp controls: phantom power, pad, instrument ref level and the
+ * four mic/instrument gains.  Registered separately from the output
+ * masters (babyface_create_masters()) since they cover a different
+ * part of the signal path (mic input, not output routing).
+ */
+int babyface_create_preamp(struct snd_usb_babyface *chip)
 {
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 0x7fffffff;
-	return 0;
-}
-
-static int bf_dim_press_get(struct snd_kcontrol *kctl,
-			    struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
-
-	ucontrol->value.integer.value[0] = READ_ONCE(chip->dim_press_count);
-	return 0;
-}
-
-int babyface_create_controls(struct snd_usb_babyface *chip)
-{
-	static const char * const out_names[6] = {
-		"AN1/2", "PH3/4", "AS1/2", "ADAT3/4", "ADAT5/6", "ADAT7/8"
-	};
 	struct snd_kcontrol *kctl;
 	int i, err;
 
-	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name = "DIM Button Press Count",
-		.access = SNDRV_CTL_ELEM_ACCESS_READ |
-			  SNDRV_CTL_ELEM_ACCESS_VOLATILE,
-		.info = bf_dim_press_info,
-		.get = bf_dim_press_get,
-	}, chip);
-	err = snd_ctl_add(chip->card, kctl);
-	if (err < 0)
-		return err;
-	chip->dim_press_kctl = kctl;
-
-	for (i = 0; i < 6; i++) {
-		kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-			.name = out_names[i],
-			.index = i,
-			.access = SNDRV_CTL_ELEM_ACCESS_READWRITE |
-				  SNDRV_CTL_ELEM_ACCESS_TLV_READ,
-			.info = bf_master_info,
-			.get = bf_master_get,
-			.put = bf_master_put,
-			.tlv.p = bf_master_tlv,
-			.private_value = i,
-		}, chip);
-		strlcat(kctl->id.name, " Playback Volume", sizeof(kctl->id.name));
-		err = snd_ctl_add(chip->card, kctl);
-		if (err < 0)
-			return err;
-		chip->master_kctl[i] = kctl;
-
-		kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-			.name = out_names[i],
-			.index = i,
-			.info = bf_mute_info,
-			.get = bf_mute_get,
-			.put = bf_mute_put,
-			.private_value = i,
-		}, chip);
-		strlcat(kctl->id.name, " Playback Switch", sizeof(kctl->id.name));
-		err = snd_ctl_add(chip->card, kctl);
-		if (err < 0)
-			return err;
-
-		dev_dbg(&chip->dev->dev, "output %d = %s\n", i, out_names[i]);
-	}
-
+	/* The control name is the type and .index is the channel (0 =
+	 * Mic 1/AN1, 1 = Mic 2/AN2), the convention the companion mixer
+	 * and existing asound.state files use.
+	 */
 	for (i = 0; i < 2; i++) {
 		u16 bit = i == 0 ? BF_PREAMP_48V_MIC1 : BF_PREAMP_48V_MIC2;
 
@@ -1904,6 +1352,8 @@ int babyface_create_controls(struct snd_usb_babyface *chip)
 			.put = bf_phantom_put,
 			.private_value = bit,
 		}, chip);
+		if (!kctl)
+			return -ENOMEM;
 		err = snd_ctl_add(chip->card, kctl);
 		if (err < 0)
 			return err;
@@ -1922,6 +1372,8 @@ int babyface_create_controls(struct snd_usb_babyface *chip)
 			.put = bf_phantom_put,
 			.private_value = bit,
 		}, chip);
+		if (!kctl)
+			return -ENOMEM;
 		err = snd_ctl_add(chip->card, kctl);
 		if (err < 0)
 			return err;
@@ -1951,11 +1403,715 @@ int babyface_create_controls(struct snd_usb_babyface *chip)
 			.tlv.p = bf_gain_tlv,
 			.private_value = i,
 		}, chip);
+		if (!kctl)
+			return -ENOMEM;
 		err = snd_ctl_add(chip->card, kctl);
 		if (err < 0)
 			return err;
 		chip->gain_kctl[i] = kctl;
 	}
+	return 0;
+}
+
+static int bf_switch_info(struct snd_kcontrol *kctl,
+			  struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
+	uinfo->count = 1;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = 1;
+	return 0;
+}
+
+static int bf_pitch_info(struct snd_kcontrol *kctl,
+			 struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+	uinfo->value.integer.min = -50;		/* -5.0 % */
+	uinfo->value.integer.max = 50;		/* +5.0 % */
+	uinfo->value.integer.step = 1;		/* 0.1 % */
+	return 0;
+}
+
+static int bf_pitch_get(struct snd_kcontrol *kctl,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->pitch;
+	return 0;
+}
+
+static int bf_pitch_put(struct snd_kcontrol *kctl,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	long np = ucontrol->value.integer.value[0];
+	int p, ret = 0;
+
+	if (np < -50 || np > 50)
+		return -EINVAL;
+	p = np;
+
+	mutex_lock(&chip->mutex);
+	if (p == chip->pitch)
+		goto out;
+
+	/* The DDS quad is a ratio on top of the family rate, the same at
+	 * every sample rate; bf_pitch_write() sends it with the settings
+	 * keepalive that commits it.
+	 */
+	ret = bf_pitch_write(chip, p);
+	if (ret < 0)
+		goto out;
+	chip->pitch = p;
+	ret = 1;
+out:
+	mutex_unlock(&chip->mutex);
+	return ret;
+}
+
+static int bf_loopback_get(struct snd_kcontrol *kctl,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	int out = kctl->private_value;
+
+	ucontrol->value.integer.value[0] = chip->loopback[out];
+	ucontrol->value.integer.value[1] = chip->loopback[out];
+	return 0;
+}
+
+/* Write the full 30-channel loopback map: pair (2*out, 2*out+1) at
+ * `on` (0x0001/0x0000), all other channels cleared - exactly what
+ * TotalMix sends on every loopback toggle (cap_loopback2.pcap).  The
+ * full-map write is also the reliable OFF (the old per-pair write
+ * sometimes failed to disengage on the hardware).
+ */
+int bf_loopback_write_map(struct snd_usb_babyface *chip, int out,
+			  bool on)
+{
+	int ch, ret;
+
+	for (ch = 0; ch < BF_LOOPBACK_CHANNELS; ch++) {
+		u16 val = (on && (ch == out * 2 || ch == out * 2 + 1))
+			  ? 0x0001 : 0x0000;
+
+		ret = bf_vendor_write(chip, BF_REQ_LOOPBACK, val, ch);
+		if (ret < 0)
+			return ret;
+	}
+	return 0;
+}
+
+static int bf_loopback_put(struct snd_kcontrol *kctl,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	int out = kctl->private_value;
+	bool on = ucontrol->value.integer.value[0];
+	int prev = -1, notify = -1;
+	int i, ret = 0;
+
+	mutex_lock(&chip->mutex);
+	if (on == chip->loopback[out])
+		goto out;
+	for (i = 0; i < 6; i++)
+		if (chip->loopback[i])
+			prev = i;
+	ret = bf_loopback_write_map(chip, out, on);
+	if (ret < 0)
+		goto out;
+	/* Single-active model (TotalMix writes one pair at 0x0001, the
+	 * rest 0x0000): toggling one output clears the others.  The
+	 * cleared one did not get its own put(), so tell user space.
+	 */
+	memset(chip->loopback, 0, sizeof(chip->loopback));
+	chip->loopback[out] = on;
+	if (on && prev >= 0 && prev != out)
+		notify = prev;
+	ret = 1;
+out:
+	mutex_unlock(&chip->mutex);
+	if (notify >= 0 && chip->loopback_kctl[notify])
+		snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
+			       &chip->loopback_kctl[notify]->id);
+	return ret;
+}
+
+static int bf_an12_get(struct snd_kcontrol *kctl,
+		       struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->an12;
+	return 0;
+}
+
+static int bf_an12_put(struct snd_kcontrol *kctl,
+		       struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	bool an12 = ucontrol->value.integer.value[0];
+	u16 v;
+	int ret = 0;
+
+	mutex_lock(&chip->mutex);
+	if (an12 == chip->an12)
+		goto out;
+	v = (chip->linked ? 0x0400 : 0x0000) | (an12 ? 0x1000 : 0x0000);
+	ret = bf_vendor_write(chip, BF_REQ_PREAMP, v, 0x1000);
+	if (ret < 0)
+		goto out;
+	ret = bf_preamp_commit(chip);
+	if (ret < 0)
+		goto out;
+	chip->an12 = an12;
+	ret = 1;
+out:
+	mutex_unlock(&chip->mutex);
+	return ret;
+}
+
+/* Clock source (PROTOCOL.md "Clock source / no-lock state",
+ * hardware-verified 2026-08-22, clktest.c): NOT a register write at
+ * all - only the BF_REG_KEEPALIVE_SETTINGS word changes (bit 2 =
+ * Optical). Matches the naming TuxMix's ALSA backend already looks
+ * for ("Sample Clock Source", the same name found on the stock
+ * snd-usb-audio Class-Compliant driver) so it picks this control up
+ * with zero changes on that side.
+ */
+static const char *const bf_clock_texts[] = {
+	"Internal", "Optical In", NULL
+};
+
+static int bf_clock_info(struct snd_kcontrol *kctl,
+			 struct snd_ctl_elem_info *uinfo)
+{
+	return snd_ctl_enum_info(uinfo, 1, 2, bf_clock_texts);
+}
+
+static int bf_clock_get(struct snd_kcontrol *kctl,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.enumerated.item[0] = chip->clock_optical ? 1 : 0;
+	return 0;
+}
+
+static int bf_clock_put(struct snd_kcontrol *kctl,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	unsigned int item = ucontrol->value.enumerated.item[0];
+	bool optical;
+	int ret = 0;
+
+	if (item > 1)
+		return -EINVAL;
+	optical = item;
+
+	mutex_lock(&chip->mutex);
+	if (optical == chip->clock_optical)
+		goto out;
+	chip->clock_optical = optical;
+	ret = bf_settings_write(chip);
+	if (ret < 0) {
+		chip->clock_optical = !optical;
+		goto out;
+	}
+	ret = 1;
+out:
+	mutex_unlock(&chip->mutex);
+	return ret;
+}
+
+/* Optical Out format: bit 10 of the same BF_REG_KEEPALIVE_SETTINGS
+ * word (PROTOCOL.md, LINUX-VALIDATION.md section 7).  The single optical
+ * port carries ADAT by default; S/PDIF mode uses only AS1/2.  Like the
+ * clock source, this is not a register write of its own.
+ */
+static const char *const bf_optical_texts[] = {
+	"ADAT", "S/PDIF", NULL
+};
+
+static int bf_optical_info(struct snd_kcontrol *kctl,
+			   struct snd_ctl_elem_info *uinfo)
+{
+	return snd_ctl_enum_info(uinfo, 1, 2, bf_optical_texts);
+}
+
+static int bf_optical_get(struct snd_kcontrol *kctl,
+			  struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.enumerated.item[0] = chip->optical_spdif ? 1 : 0;
+	return 0;
+}
+
+static int bf_optical_put(struct snd_kcontrol *kctl,
+			  struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	unsigned int item = ucontrol->value.enumerated.item[0];
+	bool spdif;
+	int ret = 0;
+
+	if (item > 1)
+		return -EINVAL;
+	spdif = item;
+
+	mutex_lock(&chip->mutex);
+	if (spdif == chip->optical_spdif)
+		goto out;
+	chip->optical_spdif = spdif;
+	ret = bf_settings_write(chip);
+	if (ret < 0) {
+		chip->optical_spdif = !spdif;
+		goto out;
+	}
+	ret = 1;
+out:
+	mutex_unlock(&chip->mutex);
+	return ret;
+}
+
+static int bf_link_get(struct snd_kcontrol *kctl,
+		       struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->linked;
+	return 0;
+}
+
+static int bf_link_put(struct snd_kcontrol *kctl,
+		       struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	bool linked = ucontrol->value.integer.value[0];
+	u16 v;
+	int ret = 0;
+
+	mutex_lock(&chip->mutex);
+	if (linked == chip->linked)
+		goto out;
+	v = (linked ? 0x0400 : 0x0000) | (chip->an12 ? 0x1000 : 0x0000);
+	ret = bf_vendor_write(chip, BF_REQ_PREAMP, v, 0x1000);
+	if (ret < 0)
+		goto out;
+	ret = bf_preamp_commit(chip);
+	if (ret < 0)
+		goto out;
+	chip->linked = linked;
+	ret = 1;
+out:
+	mutex_unlock(&chip->mutex);
+	return ret;
+}
+
+static int bf_ms_get(struct snd_kcontrol *kctl,
+		     struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->ms_proc;
+	return 0;
+}
+
+/* MS-proc: engage per the cap_ms2.pcap ON pattern - write 0x0000 to
+ * the four AN2 (side) crosspoints, AN1/2 0x0001/0x001B and PH3/4
+ * 0x0035/0x004F - the side path is muted (ear-verified 2026-08-26
+ * with the mic on AN2: MS ON = silence); release restores each
+ * block's cached fader values (host-side, like TotalMix).
+ * (The 0x1000/0x0004 writes are the DISENGAGE restore values seen in
+ * cap_ms2 - the driver had them inverted on the engage path.)
+ */
+static int bf_ms_put(struct snd_kcontrol *kctl,
+		     struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	bool on = ucontrol->value.integer.value[0];
+	int ret = 0;
+
+	mutex_lock(&chip->mutex);
+	if (on == chip->ms_proc)
+		goto out;
+	if (on) {
+		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x0035);
+		if (ret < 0)
+			goto out;
+		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x004f);
+		if (ret < 0)
+			goto out;
+		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x0001);
+		if (ret < 0)
+			goto out;
+		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x001b);
+		if (ret < 0)
+			goto out;
+	} else {
+		/* Restore each block's own AN2 crosspoint: 0x0001/0x001B
+		 * is the AN1/2 pair, 0x0035/0x004F is PH3/4.
+		 */
+		ret = bf_xpoint_write(chip, 0, 1,
+				      chip->xpoint[0][1][0],
+				      chip->xpoint[0][1][1]);
+		if (ret < 0)
+			goto out;
+		ret = bf_xpoint_write(chip, 1, 1,
+				      chip->xpoint[1][1][0],
+				      chip->xpoint[1][1][1]);
+		if (ret < 0)
+			goto out;
+	}
+	chip->ms_proc = on;
+	ret = 1;
+out:
+	mutex_unlock(&chip->mutex);
+	return ret;
+}
+
+/* DIM - cap_dim2.pcap: an absolute -20 dB on the Phones master
+ * (out 1: 8-bit 0xCB / 16-bit 0x0333) regardless of the current level,
+ * plus the 0x17 wVal=0x2000 wIdx=0x2000 flag; release restores the
+ * pre-DIM master host-side.  The master cache keeps the real volume.
+ */
+static int bf_dim_get(struct snd_kcontrol *kctl,
+		      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->dim;
+	return 0;
+}
+
+/* Apply DIM on the wire.  chip->mutex must be held by the caller, the
+ * "Dim Switch" put.
+ */
+int bf_dim_apply(struct snd_usb_babyface *chip, bool on)
+{
+	bool old = chip->dim;
+	bool muted = chip->muted[1];
+	u16 step_l, step_r, flag;
+	int ret;
+
+	lockdep_assert_held(&chip->mutex);
+	if (on) {
+		chip->dim_saved[0] = chip->master[1][0];
+		chip->dim_saved[1] = chip->master[1][1];
+	}
+	chip->dim = on;
+	step_l = on ? chip->master[1][0] : chip->dim_saved[0];
+	step_r = on ? chip->master[1][1] : chip->dim_saved[1];
+	flag = bf_flag_cycle[chip->flag_cnt];
+	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
+	ret = bf_vendor_write(chip, BF_REQ_GAIN,
+			      bf_out_reg8(muted, on, step_l),
+			      BF_REG_MASTER_8 + 2 * 1);
+	if (ret < 0)
+		goto out;
+	ret = bf_vendor_write(chip, BF_REQ_GAIN,
+			      bf_out_reg8(muted, on, step_r),
+			      BF_REG_MASTER_8 + 2 * 1 + 1);
+	if (ret < 0)
+		goto out;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+			      bf_out_reg16(muted, on, step_l),
+			      (BF_REG_MASTER_16 + 2 * 1) | flag);
+	if (ret < 0)
+		goto out;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+			      bf_out_reg16(muted, on, step_r),
+			      (BF_REG_MASTER_16 + 2 * 1 + 1) | flag);
+	if (ret < 0)
+		goto out;
+	ret = bf_vendor_write(chip, BF_REQ_PREAMP,
+			      on ? 0x2000 : 0x0000, 0x2000);
+	if (ret < 0)
+		goto out;
+	return 0;
+out:
+	chip->dim = old;
+	return ret;
+}
+
+static int bf_dim_put(struct snd_kcontrol *kctl,
+		      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	bool on = ucontrol->value.integer.value[0];
+	int ret = 0;
+
+	mutex_lock(&chip->mutex);
+	if (on == chip->dim)
+		goto out;
+	ret = bf_dim_apply(chip, on);
+	if (ret == 0)
+		ret = 1;
+out:
+	mutex_unlock(&chip->mutex);
+	return ret;
+}
+
+static int bf_width_info(struct snd_kcontrol *kctl,
+			 struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+	uinfo->value.integer.min = -100;
+	uinfo->value.integer.max = 100;
+	uinfo->value.integer.step = 1;
+	return 0;
+}
+
+static int bf_width_get(struct snd_kcontrol *kctl,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->width;
+	return 0;
+}
+
+/* Width spread: L = 0x1000*(1+w), R = 0x1000*(1-w), L+R = 0x2000.
+ * TotalMix writes the strip's src pair on the AN1/2 block (0x0000)
+ * and on the block at 0x0034 (cap_width3-7): the stereo pair spreads
+ * L/R in opposition, the mirror src (AN2) gets the swapped values.
+ * Caller holds chip->mutex.
+ */
+int bf_width_apply(struct snd_usb_babyface *chip, int w)
+{
+	u16 l = (u16)(((0x2000 * (100 + w) / 2) + 50) / 100);
+	u16 r = 0x2000 - l;
+	int ret;
+
+	/* AN1/2: AN1 L=0x0000, R=0x001A; AN2 L=0x0001, R=0x001B. */
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l, 0x0000);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r, 0x001a);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r, 0x0001);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l, 0x001b);
+	if (ret < 0)
+		return ret;
+	/* The 0x0034 block: AN1 L=0x0034, R=0x004E; AN2 L=0x0035,
+	 * R=0x004F.  TotalMix writes it in the same drag, so keep the
+	 * two halves together here and in the state replay.
+	 */
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l, 0x0034);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r, 0x004e);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r, 0x0035);
+	if (ret < 0)
+		return ret;
+	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, l, 0x004f);
+}
+
+static int bf_width_put(struct snd_kcontrol *kctl,
+			struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	long w = ucontrol->value.integer.value[0];
+	int ret = 0;
+
+	if (w < -100 || w > 100)
+		return -EINVAL;
+
+	mutex_lock(&chip->mutex);
+	if ((int)w == chip->width)
+		goto out;
+	ret = bf_width_apply(chip, (int)w);
+	if (ret < 0)
+		goto out;
+	chip->width = w;
+	ret = 1;
+out:
+	mutex_unlock(&chip->mutex);
+	return ret;
+}
+
+static int bf_fx_send_info(struct snd_kcontrol *kctl,
+			   struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = 0x1000;
+	uinfo->value.integer.step = 1;
+	return 0;
+}
+
+static int bf_fx_send_get(struct snd_kcontrol *kctl,
+			  struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->fx_send;
+	return 0;
+}
+
+static int bf_fx_send_put(struct snd_kcontrol *kctl,
+			  struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	long nv = ucontrol->value.integer.value[0];
+	u16 v;
+	int ret = 0;
+
+	/* Check before narrowing (a value >= 0x10000 would wrap to a
+	 * passing u16); see bf_master_put().
+	 */
+	if (nv < 0 || nv > 0x1000)
+		return -EINVAL;
+	v = nv;
+
+	mutex_lock(&chip->mutex);
+	if (v == chip->fx_send)
+		goto out;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, v, 0x0138);
+	if (ret < 0)
+		goto out;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, v, 0x0153);
+	if (ret < 0)
+		goto out;
+	chip->fx_send = v;
+	ret = 1;
+out:
+	mutex_unlock(&chip->mutex);
+	return ret;
+}
+
+int babyface_create_flags(struct snd_usb_babyface *chip)
+{
+	struct snd_kcontrol *kctl;
+	int i, err;
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "Varispeed Pitch",
+		.info = bf_pitch_info,
+		.get = bf_pitch_get,
+		.put = bf_pitch_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
+	for (i = 0; i < 6; i++) {
+		kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+			.name = "Loopback Switch",
+			.index = i,
+			.info = bf_mute_info,
+			.get = bf_loopback_get,
+			.put = bf_loopback_put,
+			.private_value = i,
+		}, chip);
+		err = snd_ctl_add(chip->card, kctl);
+		if (err < 0)
+			return err;
+		chip->loopback_kctl[i] = kctl;
+	}
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "AN 1>2 Switch",
+		.info = bf_switch_info,
+		.get = bf_an12_get,
+		.put = bf_an12_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "Sample Clock Source",
+		.info = bf_clock_info,
+		.get = bf_clock_get,
+		.put = bf_clock_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "Optical Out Format",
+		.info = bf_optical_info,
+		.get = bf_optical_get,
+		.put = bf_optical_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "AN1/2 Link Switch",
+		.info = bf_switch_info,
+		.get = bf_link_get,
+		.put = bf_link_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "MS Processor Switch",
+		.info = bf_switch_info,
+		.get = bf_ms_get,
+		.put = bf_ms_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "Dim Switch",
+		.info = bf_switch_info,
+		.get = bf_dim_get,
+		.put = bf_dim_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "Width",
+		.info = bf_width_info,
+		.get = bf_width_get,
+		.put = bf_width_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "FX Send Volume",
+		.info = bf_fx_send_info,
+		.get = bf_fx_send_get,
+		.put = bf_fx_send_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
 	return 0;
 }
 
@@ -2009,10 +2165,9 @@ static int bf_panel_in_decode(u8 nib)
 	}
 }
 
-/* byte1 & 7 = OUT position.  The original Babyface Pro reports
- * 0/1/2 for physical Ch 1/2 / Phones / Opt (LED-correlated capture).
- * Preserve the 4/5/6 encoding from cap_dim/cap_buttons2 as well.
- * The 0/1/2 interpretation still needs verification on the Pro FS.
+/* byte1 & 7 = OUT position.  0/1/2 for physical Ch 1/2 / Phones / Opt,
+ * LED-correlated capture, hardware-verified on both an original
+ * Babyface Pro and the Pro FS.
  */
 static int bf_panel_out_decode(u8 v)
 {
@@ -2025,83 +2180,6 @@ static int bf_panel_out_decode(u8 v)
 	case BF_PANEL_OUT_OPT:		return 3;
 	default:			return 0;
 	}
-}
-
-/* MIX-mode monitoring level (fader curve).
- * Calibrated crosspoint-fader curve (AN1->AN1/2, cap_calib.pcap
- * 2026-08-22; the same table as tuxmix-core/src/usb.rs FADER_CURVE).
- * dB stored x2 (half-dB grid): the MIX wheel steps +/-0.5 dB per click
- * on this curve (cap_mix.pcap).  0x0000 = -inf (digital mute),
- * 0x0003 = -62 dB, ... 0x2D41 = +6 dB.  Raw values interpolate linearly
- * between the 1-dB points.
- */
-#define BF_FADER_DB2_INF	(-130)	/* -65 dB = the wheel's -inf floor */
-
-static const struct bf_fader_pt {
-	s16 db2;	/* dB x 2 */
-	u16 raw;
-} bf_fader_curve[] = {
-	{ -124, 0x0003 }, { -122, 0x0004 }, { -120, 0x0005 },
-	{ -118, 0x0006 }, { -116, 0x0007 }, { -114, 0x0008 },
-	{ -112, 0x0009 }, { -110, 0x000a }, { -108, 0x000b },
-	{ -106, 0x000d }, { -104, 0x000e }, { -102, 0x0010 },
-	{ -100, 0x0012 }, {  -98, 0x0014 }, {  -96, 0x0017 },
-	{  -94, 0x0019 }, {  -92, 0x001d }, {  -90, 0x0020 },
-	{  -88, 0x0024 }, {  -86, 0x0029 }, {  -84, 0x002e },
-	{  -82, 0x0033 }, {  -80, 0x003a }, {  -78, 0x0041 },
-	{  -76, 0x0049 }, {  -74, 0x0051 }, {  -72, 0x005b },
-	{  -70, 0x0067 }, {  -68, 0x0073 }, {  -66, 0x0081 },
-	{  -64, 0x0091 }, {  -62, 0x00a3 }, {  -60, 0x00b7 },
-	{  -58, 0x00cd }, {  -56, 0x00e6 }, {  -54, 0x0102 },
-	{  -52, 0x0122 }, {  -50, 0x0145 }, {  -48, 0x016d },
-	{  -46, 0x019a }, {  -44, 0x01cc }, {  -42, 0x0204 },
-	{  -40, 0x0243 }, {  -38, 0x028a }, {  -36, 0x02d9 },
-	{  -34, 0x0332 }, {  -32, 0x0396 }, {  -30, 0x0406 },
-	{  -28, 0x0483 }, {  -26, 0x0510 }, {  -24, 0x05af },
-	{  -22, 0x0660 }, {  -20, 0x0727 }, {  -18, 0x0807 },
-	{  -16, 0x0902 }, {  -14, 0x0a1b }, {  -12, 0x0b57 },
-	{  -10, 0x0cb9 }, {   -8, 0x0e47 }, {   -6, 0x1004 },
-	{   -4, 0x11f9 }, {   -2, 0x142a }, {    0, 0x16a0 },
-	{    2, 0x1963 }, {    4, 0x1c7c }, {    6, 0x1ff6 },
-	{    8, 0x23dc }, {   10, 0x283d }, {   12, 0x2d41 },
-};
-
-/* Fader raw -> dBx2 (linear interpolation; raw 0 = -inf). */
-static int bf_fader_raw_to_db2(u16 raw)
-{
-	int i;
-
-	if (raw == 0 || raw < bf_fader_curve[0].raw)
-		return BF_FADER_DB2_INF;
-	for (i = 0; i < ARRAY_SIZE(bf_fader_curve) - 1; i++) {
-		if (raw <= bf_fader_curve[i + 1].raw) {
-			u32 num = (u32)(raw - bf_fader_curve[i].raw) *
-				  (u32)(bf_fader_curve[i + 1].db2 - bf_fader_curve[i].db2);
-			u32 den = bf_fader_curve[i + 1].raw - bf_fader_curve[i].raw;
-
-			return bf_fader_curve[i].db2 + (int)((num + den / 2) / den);
-		}
-	}
-	return bf_fader_curve[ARRAY_SIZE(bf_fader_curve) - 1].db2;
-}
-
-/* dBx2 -> fader raw (linear interpolation; below -62 dB = mute 0). */
-static u16 bf_fader_db2_to_raw(int db2)
-{
-	int i;
-
-	if (db2 <= bf_fader_curve[0].db2)
-		return db2 < bf_fader_curve[0].db2 ? 0 : bf_fader_curve[0].raw;
-	for (i = 0; i < ARRAY_SIZE(bf_fader_curve) - 1; i++) {
-		if (db2 <= bf_fader_curve[i + 1].db2) {
-			u32 num = (u32)(db2 - bf_fader_curve[i].db2) *
-				  (u32)(bf_fader_curve[i + 1].raw - bf_fader_curve[i].raw);
-			u32 den = bf_fader_curve[i + 1].db2 - bf_fader_curve[i].db2;
-
-			return bf_fader_curve[i].raw + (u16)((num + den / 2) / den);
-		}
-	}
-	return bf_fader_curve[ARRAY_SIZE(bf_fader_curve) - 1].raw;
 }
 
 /* MIX-mode VU display law - monitoring dBx2 -> the 0x1A 0x000A display
@@ -2188,6 +2266,28 @@ static int bf_panel_out_pair(struct snd_usb_babyface *chip)
 	}
 }
 
+/* Seed the MIX level from the reference crosspoint of the current
+ * IN/SELECT selection, and return that source index.  Called when MIX
+ * is engaged and whenever SELECT moves while it is on.
+ */
+static int bf_panel_mix_seed(struct snd_usb_babyface *chip)
+{
+	int out = bf_panel_out_pair(chip);
+	int ref = READ_ONCE(chip->panel_in) == 3 ? 4 :
+		  (READ_ONCE(chip->panel_in) == 2 ? 2 : 0) +
+		  (READ_ONCE(chip->panel_select) == 1 ? 1 : 0);
+	int db2 = bf_fader_raw_to_db2(chip->xpoint[out][ref][0]);
+
+	/* A muted crosspoint reads as -inf, six steps below the curve's
+	 * first point; seeding there would burn six clockwise clicks
+	 * before anything is audible.  Start at the first point instead.
+	 */
+	if (db2 < bf_fader_curve[0].db2)
+		db2 = bf_fader_curve[0].db2;
+	chip->panel_mix_db2 = db2;
+	return ref;
+}
+
 /* The kernel driver plays the TotalMix role for the MIX button (the
  * standalone emulator is hardware-validated in tuxmix-core/src/panel.rs
  * + usb.rs): one wheel click in fader mode = +/-0.5 dB on the SELECT-
@@ -2225,10 +2325,9 @@ static void bf_panel_mix_wheel(struct snd_usb_babyface *chip, int delta)
 	}
 
 	mutex_lock(&chip->mutex);
-	db2 = bf_fader_raw_to_db2(chip->panel_mix_raw);
-	db2 = clamp(db2 + delta, BF_FADER_DB2_INF, 12);
+	db2 = clamp(chip->panel_mix_db2 + delta, BF_FADER_DB2_INF, 12);
+	chip->panel_mix_db2 = db2;
 	raw = bf_fader_db2_to_raw(db2);
-	chip->panel_mix_raw = raw;
 	for (i = 0; i < n; i++) {
 		const struct bf_source *s = &bf_sources[targets[i]];
 
@@ -2284,17 +2383,19 @@ static void bf_panel_remute(struct snd_usb_babyface *chip, int out)
 static void bf_panel_write_master(struct snd_usb_babyface *chip, int out,
 				  u16 l, u16 r)
 {
+	bool muted = chip->muted[out];
+	bool dim = out == 1 && chip->dim;
 	u16 flag;
 
 	flag = bf_flag_cycle[chip->flag_cnt];
 	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-	bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(l),
+	bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, l),
 			BF_REG_MASTER_8 + 2 * out);
-	bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(r),
+	bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, r),
 			BF_REG_MASTER_8 + 2 * out + 1);
-	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(l),
+	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_out_reg16(muted, dim, l),
 			(BF_REG_MASTER_16 + 2 * out) | flag);
-	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(r),
+	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_out_reg16(muted, dim, r),
 			(BF_REG_MASTER_16 + 2 * out + 1) | flag);
 	chip->master[out][0] = l;
 	chip->master[out][1] = r;
@@ -2331,13 +2432,15 @@ static void bf_panel_write_master(struct snd_usb_babyface *chip, int out,
 static void bf_panel_out_wheel_write(struct snd_usb_babyface *chip, int out,
 				     u16 l, u16 r)
 {
+	bool muted = chip->muted[out];
+	bool dim = out == 1 && chip->dim;
 	u16 flag;
 
 	flag = bf_flag_cycle[chip->flag_cnt];
 	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(l),
+	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_out_reg16(muted, dim, l),
 			(BF_REG_MASTER_16 + 2 * out) | flag);
-	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(r),
+	bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_out_reg16(muted, dim, r),
 			(BF_REG_MASTER_16 + 2 * out + 1) | flag);
 	chip->master[out][0] = l;
 	chip->master[out][1] = r;
@@ -2530,17 +2633,21 @@ static void bf_panel_out_resync(struct snd_usb_babyface *chip)
 			goto unlock;
 	}
 	if (!chip->muted[out]) {
+		bool dim = out == 1 && chip->dim;
+
 		flag = bf_flag_cycle[chip->flag_cnt];
 		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-		bf_vendor_write(chip, BF_REQ_GAIN, BF_MASTER_8_0DB + db[0],
+		bf_vendor_write(chip, BF_REQ_GAIN,
+				bf_out_reg8(false, dim, chip->master[out][0]),
 				BF_REG_MASTER_8 + 2 * out);
-		bf_vendor_write(chip, BF_REQ_GAIN, BF_MASTER_8_0DB + db[1],
+		bf_vendor_write(chip, BF_REQ_GAIN,
+				bf_out_reg8(false, dim, chip->master[out][1]),
 				BF_REG_MASTER_8 + 2 * out + 1);
 		bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				bf_master_reg16(chip->master[out][0]),
+				bf_out_reg16(false, dim, chip->master[out][0]),
 				(BF_REG_MASTER_16 + 2 * out) | flag);
 		bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-				bf_master_reg16(chip->master[out][1]),
+				bf_out_reg16(false, dim, chip->master[out][1]),
 				(BF_REG_MASTER_16 + 2 * out + 1) | flag);
 	}
 unlock:
@@ -2837,6 +2944,11 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 			if (kctl)
 				snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
 					       &kctl->id);
+			if (READ_ONCE(chip->panel_mix)) {
+				mutex_lock(&chip->mutex);
+				bf_panel_mix_seed(chip);
+				mutex_unlock(&chip->mutex);
+			}
 		}
 	}
 	/* SELECT hold (the OUT-balance gesture, manual sec. 5.1 "Output
@@ -2892,7 +3004,7 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 			WRITE_ONCE(chip->panel_mix, false);
 			WRITE_ONCE(chip->panel_saw_fader, false);
 		} else {
-			int ref, out;
+			int ref;
 			int m;
 
 			bf_vendor_write(chip, BF_REQ_PREAMP, 0x8480, 0x8c80);
@@ -2903,11 +3015,7 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 			 * the first SELECT-chosen channel of the IN pair;
 			 * Opt = the AS1/2 pair).
 			 */
-			out = bf_panel_out_pair(chip);
-			ref = READ_ONCE(chip->panel_in) == 3 ? 4 :
-			      (READ_ONCE(chip->panel_in) == 2 ? 2 : 0) +
-			      (READ_ONCE(chip->panel_select) == 1 ? 1 : 0);
-			chip->panel_mix_raw = chip->xpoint[out][ref][0];
+			ref = bf_panel_mix_seed(chip);
 			/* Seed the VU display shadow at the CURRENT level
 			 * (cap_panel.pcap: TotalMix writes the display value of
 			 * the current fader on engage - 10 in that session -
@@ -2917,8 +3025,7 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 			for (m = 0; m < 4; m++)
 				chip->panel_mix_disp[m] = 0;
 			if (ref < 4) {
-				int db2 = bf_fader_raw_to_db2(chip->panel_mix_raw);
-				int disp = bf_mix_display(db2);
+				int disp = bf_mix_display(chip->panel_mix_db2);
 
 				bf_vendor_write(chip, BF_REQ_GAIN, (u16)disp,
 						BF_REG_PANEL_GAIN + ref);
@@ -2928,7 +3035,12 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 		bf_panel_notify(chip, BF_PANEL_KCTL_MIX);
 	}
 	if (fader_now) {
-		WRITE_ONCE(chip->panel_saw_fader, true);
+		/* Do not re-arm the gate on a tick that just left MIX:
+		 * the device's byte2 can still show fader mode for a
+		 * frame or two after the exit writes.
+		 */
+		if (READ_ONCE(chip->panel_mix))
+			WRITE_ONCE(chip->panel_saw_fader, true);
 	} else if (READ_ONCE(chip->panel_mix) && READ_ONCE(chip->panel_saw_fader) &&
 		   st[3] != BF_PANEL_FLASH_MIX) {
 		/* device left fader mode by itself (IN/OUT/SET press) */
@@ -3107,6 +3219,7 @@ static int bf_panel_select_put(struct snd_kcontrol *kctl,
 	 */
 	bool restore = time_is_after_jiffies(chip->panel_start + 3 * HZ);
 	s8 sel = v < 4 ? v : -1;
+	int ret = 1;
 
 	if (v > 4)
 		return -EINVAL;
@@ -3117,17 +3230,26 @@ static int bf_panel_select_put(struct snd_kcontrol *kctl,
 	 */
 	if (restore && chip->reprobe)
 		return 0;
+
+	mutex_lock(&chip->mutex);
 	if (pair == READ_ONCE(chip->panel_in) - 1 && !restore && sel >= 0)
 		/* Set while the LEDs show the selection: the next press steps
 		 * it.
 		 */
 		chip->panel_select_armed = true;
-	if (sel == chip->panel_sel[pair])
-		return 0;
+	if (sel == chip->panel_sel[pair]) {
+		ret = 0;
+		goto out;
+	}
 	chip->panel_sel[pair] = sel;
-	if (pair == READ_ONCE(chip->panel_in) - 1)
+	if (pair == READ_ONCE(chip->panel_in) - 1) {
 		bf_panel_sel_load(chip);
-	return 1;
+		if (READ_ONCE(chip->panel_mix))
+			bf_panel_mix_seed(chip);
+	}
+out:
+	mutex_unlock(&chip->mutex);
+	return ret;
 }
 
 /* Shared boolean get - private_value selects mix (0) / dim (1). */
@@ -3138,6 +3260,25 @@ static int bf_panel_bool_get(struct snd_kcontrol *kctl,
 
 	ucontrol->value.integer.value[0] =
 		kctl->private_value ? READ_ONCE(chip->panel_dim) : READ_ONCE(chip->panel_mix);
+	return 0;
+}
+
+static int bf_dim_press_info(struct snd_kcontrol *kctl,
+			     struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = 0x7fffffff;
+	return 0;
+}
+
+static int bf_dim_press_get(struct snd_kcontrol *kctl,
+			    struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = READ_ONCE(chip->dim_press_count);
 	return 0;
 }
 
@@ -3249,6 +3390,19 @@ int babyface_create_panel(struct snd_usb_babyface *chip)
 		chip->panel_select_kctl[pair] = kctl;
 	}
 
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "DIM Button Press Count",
+		.access = SNDRV_CTL_ELEM_ACCESS_READ |
+			  SNDRV_CTL_ELEM_ACCESS_VOLATILE,
+		.info = bf_dim_press_info,
+		.get = bf_dim_press_get,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+	chip->dim_press_kctl = kctl;
+
 	return 0;
 }
 
@@ -3323,11 +3477,12 @@ void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 	s64 t;
 	int both = 0, cflip = 0;
 
-	if (gain_x10 == 0 || q100 <= 0) {
-		/* Inactive band: identity words (also guards the alpha
-		 * division below against the default Q=0 the controls start
-		 * with - a user setting gain before Q used to hit a kernel
-		 * divide-by-zero oops).
+	if (type == 0 || gain_x10 == 0 || q100 <= 0) {
+		/* Inactive band (type Off, or no gain/Q yet): identity
+		 * words.  Also guards the alpha division below against
+		 * the default Q=0 the controls start with - a user
+		 * setting gain before Q used to hit a kernel
+		 * divide-by-zero oops.
 		 */
 		w[0] = 0;
 		w[1] = 0;
@@ -3456,7 +3611,7 @@ static u32 bf_eq_lc_freq_raw(s32 freq_hz, s32 slope_db)
 		f = f * 6977 / 10000;
 		break;
 	}
-	word = (11508 * f * 11656 + (11656 + f) / 2) / (11656 + f);
+	word = div64_s64(11508 * f * 11656 + (11656 + f) / 2, 11656 + f);
 	return (u32)word;
 }
 
@@ -3531,7 +3686,7 @@ static int bf_eq_write_strip(struct snd_usb_babyface *chip, int strip)
  * (bf_eq_put() and bf_eq_reupload() do) - asserting it here catches a
  * future caller that forgets, instead of a silent self-deadlock.
  */
-static void bf_eq_update_strip(struct snd_usb_babyface *chip, int strip)
+static int bf_eq_update_strip(struct snd_usb_babyface *chip, int strip)
 {
 	struct bf_eq_channel *e = &chip->eq[strip];
 	s32 fs = chip->rate ? chip->rate : 48000;
@@ -3553,7 +3708,7 @@ static void bf_eq_update_strip(struct snd_usb_babyface *chip, int strip)
 	e->shared = last_c4;
 	e->lc_raw = bf_eq_lc_freq_raw(e->lc_hz, e->slope_db);
 	e->slope = bf_eq_lc_slope_byte(e->slope_db);
-	bf_eq_write_strip(chip, strip);
+	return bf_eq_write_strip(chip, strip);
 }
 
 /* Recompute + re-upload all four strips (rate change). Caller must
@@ -3786,14 +3941,19 @@ static int bf_eq_put(struct snd_kcontrol *kctl,
 	if (param == 0) {
 		if (e->on != !!nv) {
 			e->on = !!nv;
-			bf_eq_update_strip(chip, strip);
+			ret = bf_eq_update_strip(chip, strip);
+			if (ret < 0)
+				goto out;
 			ret = 1;
 		}
 	} else if (v && *v != nv) {
 		*v = nv;
-		bf_eq_update_strip(chip, strip);
+		ret = bf_eq_update_strip(chip, strip);
+		if (ret < 0)
+			goto out;
 		ret = 1;
 	}
+out:
 	mutex_unlock(&chip->mutex);
 	return ret;
 }
@@ -3808,9 +3968,11 @@ void bf_eq_defaults(struct snd_usb_babyface *chip)
 {
 	int strip, band;
 
-	for (strip = 0; strip < 4; strip++)
+	for (strip = 0; strip < 4; strip++) {
+		chip->eq[strip].slope_db = 6;
 		for (band = 0; band < 3; band++)
 			chip->eq[strip].band_q[band] = 100;
+	}
 }
 
 int babyface_create_eq(struct snd_usb_babyface *chip)

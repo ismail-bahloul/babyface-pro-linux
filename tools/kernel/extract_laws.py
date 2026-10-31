@@ -86,16 +86,16 @@ def index(src):
                 start -= 1
             j = i
             if m.group(2) == "(":
-                while j < len(lines) and not lines[j].rstrip().endswith(
+                while j < len(lines) and not strip_comments(lines[j]).rstrip().endswith(
                         (")", "{", ";")):
                     j += 1
-                if lines[j].rstrip().endswith(";"):
+                if strip_comments(lines[j]).rstrip().endswith(";"):
                     i = j + 1          # a prototype
                     continue
                 while j < len(lines) and lines[j] != "}":
                     j += 1
             else:
-                while j < len(lines) and not lines[j].rstrip().endswith(";"):
+                while j < len(lines) and not strip_comments(lines[j]).rstrip().endswith(";"):
                     j += 1
             out.setdefault(name, (offs[start], "\n".join(lines[start:j + 1])))
             i = j + 1

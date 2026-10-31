@@ -1,0 +1,177 @@
+From ed591838c086970dac556053e05d716be49c8518 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
+Date: Tue Oct 27 11:13:22 2026 +0100
+Subject: [PATCH v8 0/8] ALSA: usb: add RME Babyface Pro driver (proprietary mode)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Hi Takashi,
+
+This is v8 of the RME Babyface Pro proprietary-mode driver.  The split
+is unchanged from v5: a minimal core first, the mixer added piece by
+piece, suspend/resume near the end, the front panel and the DSP EQ
+last, and a design document.  The series is still based on
+next-20261026, so this is a fix round, not a rebase.
+
+This is not an RFC.  Every point below is a fix to a defect found in
+review of v7, apart from the stereo split one, which a user reported
+from USB captures of the vendor software.  None of them changes the
+protocol or the control layout.
+
+Changes since v7:
+
+ - Probe and stream (patch 1).  probe() returned 0 after freeing the
+   card when an URB or DMA buffer allocation failed; it now returns
+   -ENOMEM.  Trigger START re-checks the rate and period that prepare()
+   checks, so a substream prepared before the other direction changed
+   the session cannot start against stale geometry.  in_done and
+   out_inflight are initialised before the URBs go out, and a URB that
+   cannot be resubmitted is treated as fatal instead of waiting for a
+   run of errors that a later good completion would clear.
+
+ - Output masters (patch 2).  Every snd_ctl_new1() result is checked
+   before the name is written.  The output pair switch is a mono
+   switch, which is what the hardware does; it used to advertise two
+   channels and ignore the second.
+
+ - Preamp and trim (patch 3).  The same NULL checks in the trim
+   controls, with trim_kctl stored only after snd_ctl_add() succeeds
+   (it could be left dangling on failure).  The Boost 0x0003 commit
+   value is re-sent on AN 1>2, on the input link and in the state
+   replay, not only on preamp writes, so Boost no longer falls back to
+   -10dBV.  The ref level is derived from the 0x17 readback at probe,
+   the phantom bit is sampled under the mutex, and the unused
+   bf_gain_db() is gone.  The preamp and capture control names stay as
+   they are, with .index selecting the channel: the companion mixer
+   and the asound.state files already reference them, and the index is
+   the ALSA convention for a per-channel control.  Turning a playback
+   pair's stereo split off wrote 0x1000 to both sides of its AN1/2
+   crosspoint, 6 dB below what the vendor software writes for a joined
+   pair, and lost the level set on that crosspoint; it now restores
+   the cached crosspoint.
+
+ - Routing flags (patch 4).  bf_state_apply_flags() used to write
+   0x1000 to the AN1 and AN2 crosspoints on every probe and resume,
+   even at width 0, after the default mixer had left those inputs
+   muted.  The cache still said 0, so a later write of 0 returned early
+   and could not mute them again.  The width replay is now guarded and
+   shares one helper with the width control.  DIM, mute, the master
+   controls and the front-panel wheels all derive the Phones level from
+   one helper, so they no longer cancel each other.  bf_ms_put()
+   restores each output block's own crosspoint, the loopback control
+   notifies the pair it clears, and the enum and integer puts check
+   their bounds before narrowing.
+
+ - Suspend/resume (patch 5).  No change of its own; it inherits the
+   replay fixes from patch 4.
+
+ - Front panel (patch 6).  The MIX level is kept in dB2 instead of the
+   quantised register value, so clicks below the curve's first point
+   are no longer lost and a muted input comes up on the first click;
+   SELECT re-seeds the level while MIX is on.  The MIX gate is no
+   longer re-armed on the tick that leaves the mode, reprobe is set
+   before the card becomes visible, and the panel master writers
+   respect DIM.
+
+ - EQ (patch 7).  The low-cut frequency uses div64_s64() for the
+   variable divisor, so a 32-bit module does not need __divdi3 (not
+   exported on ARM).  A band of type Off is identity rather than a high
+   shelf, the default slope matches the value the control reports, and
+   a failed strip upload is returned to the caller.
+
+ - Documentation (patch 8).  Wording follows the one-map crosspoint
+   model; no functional change.
+
+Every patch builds in-tree on its own against next-20261026 with W=1
+and no warnings.  checkpatch --strict reports no errors; the known
+false positives are the same as v7 ('ang' for the CORDIC angle, and the
+MAINTAINERS note on the patches that add files).
+
+Validated on the unit with this tree:
+
+ - regress.sh --mixer-restore --disconnect-test passes 41/41: the
+   full-duplex sweep of the nine rates at periods 256 to 2048 with no
+   xruns, runtime renegotiation, 30 start/stop cycles, the mixer state
+   restored across an unbind/rebind, and an unbind in the middle of a
+   capture.
+
+ - The DIM/mute/volume matrix was checked on the wire with usbmon:
+   DIM writes the exact 0xcb/0x0333 pair, a volume change while DIM
+   is on keeps that pair, mute writes 0x3b/0x0000, unmute while DIM
+   is on restores 0xcb/0x0333, and releasing DIM restores the new
+   volume.
+
+ - The probe/rebind replay was checked on the wire too: after the
+   default mixer writes 0x0000 to the AN1/AN2 crosspoints, no 0x1000
+   write follows, so the width block no longer unmutes the inputs.
+
+ - The MIX-wheel arithmetic is covered by fader_selftest: a muted
+   crosspoint seeds at the curve's first point, one clockwise click
+   leaves mute, and two counter-clockwise clicks from the old -52 dB
+   sticking point move.
+
+ - The physical MIX-wheel gesture was checked on the unit: from a
+   muted AN3 crosspoint, one clockwise click moved it to 0x0004 (the
+   old code left it at 0 for the first five clicks), two clockwise and
+   two counter-clockwise clicks stepped it to 0x0003, and the level
+   followed the wheel in both directions.
+
+ - The stereo split was checked through the AN1/2 digital loopback:
+   with PB1 at the default crosspoint, split then join comes back at
+   the level it started from (-51.5 dB before and after; it used to
+   come back at -54.5 dB).
+
+Known limitations, unchanged from v7:
+
+ - USB autosuspend is not supported; it is disabled at probe.  S3
+   suspend/resume works.
+
+ - A few protocol details remain open (documented in the source, not
+   blocking): the preamp readback index semantics, a width
+   strip-ownership edge case, whether DIM's scope follows TotalMix's
+   Main Out setting, and the exact high-frequency warping of the EQ
+   coefficients against the vendor curve.
+
+ - The URB size and count are load-time parameters, though the size
+   follows the period the application asks for.
+
+Disclosure: as with previous versions, the reverse-engineering and
+substantial portions of the kernel implementation were written with
+heavy assistance from AI coding assistants.  All of it was verified by
+hand on real hardware; the human authors remain responsible for the
+result via Signed-off-by.
+
+Thanks,
+Ismaïl
+
+
+Ismaïl Bahloul (8):
+  ALSA: usb: add RME Babyface Pro driver core (probe, PCM stream)
+  ALSA: usb: babyfacepro: add output masters and crosspoint routing
+  ALSA: usb: babyfacepro: add mic preamp, phantom/pad and input trim
+  ALSA: usb: babyfacepro: add routing flags and varispeed pitch
+  ALSA: usb: babyfacepro: add S3 suspend/resume
+  ALSA: usb: babyfacepro: add the front-panel poll and controls
+  ALSA: usb: babyfacepro: add the hardware DSP EQ
+  Documentation: sound: add the Babyface Pro proprietary-mode design doc
+
+ Documentation/sound/cards/babyface-pro.rst |  218 ++
+ Documentation/sound/cards/index.rst        |    1 +
+ MAINTAINERS                                |    6 +
+ sound/usb/Kconfig                          |   17 +
+ sound/usb/Makefile                         |    2 +-
+ sound/usb/babyfacepro/Makefile             |    4 +
+ sound/usb/babyfacepro/babyfacepro-ctl.c    | 4016 ++++++++++++++++++++
+ sound/usb/babyfacepro/babyfacepro.c        | 1991 ++++++++++
+ sound/usb/babyfacepro/babyfacepro.h        |  568 +++
+ 9 files changed, 6822 insertions(+), 1 deletion(-)
+ create mode 100644 Documentation/sound/cards/babyface-pro.rst
+ create mode 100644 sound/usb/babyfacepro/Makefile
+ create mode 100644 sound/usb/babyfacepro/babyfacepro-ctl.c
+ create mode 100644 sound/usb/babyfacepro/babyfacepro.c
+ create mode 100644 sound/usb/babyfacepro/babyfacepro.h
+
+-- 
+2.56.0
+

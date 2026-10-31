@@ -71,6 +71,26 @@ int main(void)
 		prev = d;
 	}
 
+	/* The MIX wheel keeps its level in dB2, so a click below the
+	 * curve's first point is no longer lost.  A muted crosspoint
+	 * seeds at the first point, and one CW click leaves mute; two
+	 * CCW clicks from the old -52 dB (0x000e) sticking point move.
+	 */
+	{
+		int db2 = BF_FADER_DB2_INF;
+
+		if (db2 < bf_fader_curve[0].db2)
+			db2 = bf_fader_curve[0].db2;
+		chk("mix seed db2", db2, -124);
+		db2 += 1;
+		chk("mix +1 leaves mute", bf_fader_db2_to_raw(db2) != 0, 1);
+
+		db2 = -104;	/* -52 dB, the old 0x000e sticking point */
+		db2 -= 1;	/* one CCW click may round to the same raw */
+		db2 -= 1;
+		chk("mix -2 clicks move", bf_fader_db2_to_raw(db2) <
+		    bf_fader_db2_to_raw(-104), 1);
+	}
 	if (fails)
 		printf("== %d FAILURES ==\n", fails);
 	else
