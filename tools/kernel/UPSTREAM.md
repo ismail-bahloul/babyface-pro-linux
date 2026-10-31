@@ -490,6 +490,14 @@ hand-written markdown version, kept for its history only.
   `KERNEL-DRIVER.md` Known-gaps item 15 for the design sketch. Kept
   out of the RFC on purpose: it touches the streaming core and is not a
   submission blocker.
+- **Stereo-source crosspoint law** (issue #31, point 3): the crosspoint
+  controls put 0 dB at `0x16a0` (0x2000 / sqrt 2), the vendor software's
+  level for a mono source panned to the centre.  For a stereo source
+  (AS1/2, ADAT, playback) TotalMix FX writes `0x2000` at 0 dB, so every
+  stereo crosspoint comes out 3 dB low.  Fixing it changes the TLV and
+  range of those controls, the power-on defaults, the MIX wheel's
+  conversion and the CUE/width values, and TuxMix's mapping; kept out
+  of v8 so it gets its own patch and its own loopback measurement.
 
 ## Build / test commands
 

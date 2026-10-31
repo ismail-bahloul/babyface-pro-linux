@@ -1,4 +1,4 @@
-From fa2bdec040d42a4712ceb5435d8a96d42c007622 Mon Sep 17 00:00:00 2001
+From 323b70d4fb2adf24ed422bb50710d864a2c4cc86 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:22 +0100
 Subject: [PATCH v8 7/8] ALSA: usb: babyfacepro: add the hardware DSP EQ
@@ -30,7 +30,7 @@ Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
  3 files changed, 661 insertions(+), 2 deletions(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index d7438402f..5ec3a84fa 100644
+index 4ec43811b..9e76630b1 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
 @@ -4,7 +4,8 @@
@@ -43,7 +43,7 @@ index d7438402f..5ec3a84fa 100644
   *
   * See babyfacepro.h for the shared device state and register map,
   * and babyfacepro.c for the core driver (protocol, PCM streaming,
-@@ -3401,3 +3402,612 @@ int babyface_create_panel(struct snd_usb_babyface *chip)
+@@ -3404,3 +3405,612 @@ int babyface_create_panel(struct snd_usb_babyface *chip)
  
  	return 0;
  }

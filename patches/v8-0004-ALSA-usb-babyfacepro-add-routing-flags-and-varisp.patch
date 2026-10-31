@@ -1,4 +1,4 @@
-From 79b5dabd20bf74a4c95e9d75d40270a4dda8c8ce Mon Sep 17 00:00:00 2001
+From 79b6e694b31291ccf4ce8078e8b6f91581f8fda3 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:20 +0100
 Subject: [PATCH v8 4/8] ALSA: usb: babyfacepro: add routing flags and
@@ -28,7 +28,7 @@ Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
  3 files changed, 929 insertions(+), 73 deletions(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index dd938ad0a..3d94c9cf4 100644
+index d7d3dbf93..253d250c7 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
 @@ -10,8 +10,10 @@
@@ -267,7 +267,7 @@ index dd938ad0a..3d94c9cf4 100644
  }
  
  /* Phase (polarity) invert (AN1-4 only, PROTOCOL.md "Phase toggle",
-@@ -1300,3 +1327,705 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
+@@ -1303,3 +1330,705 @@ int babyface_create_preamp(struct snd_usb_babyface *chip)
  	}
  	return 0;
  }

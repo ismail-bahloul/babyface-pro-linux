@@ -1,4 +1,4 @@
-From 443c346f55d37e445e50e014c80ab91e3299a1ed Mon Sep 17 00:00:00 2001
+From ed591838c086970dac556053e05d716be49c8518 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue Oct 27 11:13:22 2026 +0100
 Subject: [PATCH v8 0/8] ALSA: usb: add RME Babyface Pro driver (proprietary mode)
@@ -15,7 +15,9 @@ last, and a design document.  The series is still based on
 next-20261026, so this is a fix round, not a rebase.
 
 This is not an RFC.  Every point below is a fix to a defect found in
-review of v7.  None of them changes the protocol or the control layout.
+review of v7, apart from the stereo split one, which a user reported
+from USB captures of the vendor software.  None of them changes the
+protocol or the control layout.
 
 Changes since v7:
 
@@ -43,7 +45,11 @@ Changes since v7:
    bf_gain_db() is gone.  The preamp and capture control names stay as
    they are, with .index selecting the channel: the companion mixer
    and the asound.state files already reference them, and the index is
-   the ALSA convention for a per-channel control.
+   the ALSA convention for a per-channel control.  Turning a playback
+   pair's stereo split off wrote 0x1000 to both sides of its AN1/2
+   crosspoint, 6 dB below what the vendor software writes for a joined
+   pair, and lost the level set on that crosspoint; it now restores
+   the cached crosspoint.
 
  - Routing flags (patch 4).  bf_state_apply_flags() used to write
    0x1000 to the AN1 and AN2 crosspoints on every probe and resume,
@@ -111,6 +117,11 @@ Validated on the unit with this tree:
    two counter-clockwise clicks stepped it to 0x0003, and the level
    followed the wheel in both directions.
 
+ - The stereo split was checked through the AN1/2 digital loopback:
+   with PB1 at the default crosspoint, split then join comes back at
+   the level it started from (-51.5 dB before and after; it used to
+   come back at -54.5 dB).
+
 Known limitations, unchanged from v7:
 
  - USB autosuspend is not supported; it is disabled at probe.  S3
@@ -151,10 +162,10 @@ Ismaïl Bahloul (8):
  sound/usb/Kconfig                          |   17 +
  sound/usb/Makefile                         |    2 +-
  sound/usb/babyfacepro/Makefile             |    4 +
- sound/usb/babyfacepro/babyfacepro-ctl.c    | 4013 ++++++++++++++++++++
+ sound/usb/babyfacepro/babyfacepro-ctl.c    | 4016 ++++++++++++++++++++
  sound/usb/babyfacepro/babyfacepro.c        | 1991 ++++++++++
  sound/usb/babyfacepro/babyfacepro.h        |  568 +++
- 9 files changed, 6819 insertions(+), 1 deletion(-)
+ 9 files changed, 6822 insertions(+), 1 deletion(-)
  create mode 100644 Documentation/sound/cards/babyface-pro.rst
  create mode 100644 sound/usb/babyfacepro/Makefile
  create mode 100644 sound/usb/babyfacepro/babyfacepro-ctl.c

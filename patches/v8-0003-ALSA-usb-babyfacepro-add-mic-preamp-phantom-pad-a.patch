@@ -1,4 +1,4 @@
-From 3bf238cc244c79a4c677290a97b600aabb90d1d6 Mon Sep 17 00:00:00 2001
+From 306714b2e18a44d3b727fb238f37a0fd38073ca0 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:19 +0100
 Subject: [PATCH v8 3/8] ALSA: usb: babyfacepro: add mic preamp, phantom/pad
@@ -23,16 +23,16 @@ Co-developed-by: David Fredman <davfre@gmail.com>
 Signed-off-by: David Fredman <davfre@gmail.com>
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---
- sound/usb/babyfacepro/babyfacepro-ctl.c | 637 ++++++++++++++++++++++++
- sound/usb/babyfacepro/babyfacepro.c     | 111 ++++-
+ sound/usb/babyfacepro/babyfacepro-ctl.c | 640 ++++++++++++++++++++++++
+ sound/usb/babyfacepro/babyfacepro.c     | 111 +++-
  sound/usb/babyfacepro/babyfacepro.h     |  79 +++
- 3 files changed, 826 insertions(+), 1 deletion(-)
+ 3 files changed, 829 insertions(+), 1 deletion(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index 4e9222ddd..dd938ad0a 100644
+index 4e9222ddd..d7d3dbf93 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
-@@ -663,3 +663,640 @@ int babyface_create_masters(struct snd_usb_babyface *chip)
+@@ -663,3 +663,643 @@ int babyface_create_masters(struct snd_usb_babyface *chip)
  
  	return 0;
  }
@@ -149,19 +149,22 @@ index 4e9222ddd..dd938ad0a 100644
 +
 +/* Stereo split (PROTOCOL.md "Stereo split", cap_ctrl3.pcap, hardware-
 + * verified): a playback pair's signal into the AN1/2 monitor bus goes
-+ * hard-split (L=0x2000/R=0x0000, "split-mono") instead of the normal
-+ * stereo pair (L=R=0x1000, -6 dB each side) - fixed constants, not
-+ * derived from the current fader value (unlike Phase, there's nothing
-+ * to preserve), matching TuxMix's own `usb.rs::set_stereo_split`
-+ * exactly. Only reaches the AN1/2 destination (its block of the map),
-+ * the same scope as CUE/mute/solo. `chip->xpoint[][]` is deliberately
-+ * left untouched, same reasoning as Phase.
++ * hard-split (L=0x2000/R=0x0000, "split-mono").  Only reaches the AN1/2
++ * destination (its block of the map), the same scope as CUE/mute/solo.
++ * `chip->xpoint[][]` is deliberately left untouched, same reasoning as
++ * Phase.
++ *
++ * Joining the pair again puts back the pair's own AN1/2 crosspoint from
++ * the cache.  It used to write L=R=0x1000, read as "-6 dB per side",
++ * which issue #31 found to be 6 dB below what TotalMix FX writes for a
++ * joined pair at 0 dB (0x2000 per side), and which also dropped
++ * whatever level the user had set on that crosspoint.
 + */
 +int bf_split_apply(struct snd_usb_babyface *chip, int pb, bool split)
 +{
 +	const struct bf_source *s = &bf_sources[8 + pb];
-+	u16 l = split ? 0x2000 : 0x1000;
-+	u16 r = split ? 0x0000 : 0x1000;
++	u16 l = split ? 0x2000 : chip->xpoint[0][8 + pb][0];
++	u16 r = split ? 0x0000 : chip->xpoint[0][8 + pb][1];
 +	int ret;
 +
 +	/* The AN1/2 block.  The same values also went to a "standard map"
