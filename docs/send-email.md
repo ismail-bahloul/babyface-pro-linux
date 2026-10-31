@@ -9,6 +9,10 @@ paste, not a re-investigation.
 > It is in the linux-sound archive; the thread is the only one found by
 > `s:"RME Babyface Pro driver"`.  This recipe stays for v8 or for
 > replying on the list.
+>
+> Status 2026-10-31: v8 is cut as `patches/v8-*.patch` and lives on
+> `fix/sashiko-v8`, but it has **not been sent**.  The command below
+> targets v8; run it only after the driver PR is merged.
 
 ## Prerequisites (CachyOS/Arch)
 
@@ -61,22 +65,26 @@ git format-patch --rfc --cover-letter -v4 -o /tmp/v4 origin/master..v4b
    checkpatch on the **generated patch files**, not only on the
    sources.
 
-## Before sending: the blocker
+## Before sending: the blocker (resolved in v8)
 
-Patch 1 carries `FILL-IN-BEFORE-SENDING` in place of David Fredman's
+v7 patch 1 carried `FILL-IN-BEFORE-SENDING` in place of David Fredman's
 address, in both the `Co-developed-by:` and his `Signed-off-by:`. His
 GitHub author address is a `users.noreply.github.com` one, which is
-not valid for the DCO. The placeholder is deliberate: checkpatch
-reports it as an ERROR and `git send-email` cannot parse it as an
-address, so the series cannot go out by accident with his credit
-missing or wrong. He has been asked for the name and address he wants
-(issue #4).
+not valid for the DCO. The placeholder was deliberate: checkpatch
+reported it as an ERROR and `git send-email` could not parse it as an
+address, so the series could not go out by accident with his credit
+missing or wrong.
+
+That is resolved as of v8: patch 1 now carries
+`David Fredman <davfre@gmail.com>` in both trailers.  There is no
+placeholder left, so the old safety net is gone.  Re-read those two
+trailers before sending.
 
 ## Send
 
-The current series is v7 (`patches/v7-*.patch`).  Run it once with
+The current series is v8 (`patches/v8-*.patch`).  Run it once with
 `--dry-run` first: it prints every mail with its recipients and sends
-nothing.
+nothing.  The driver PR must be merged before the real run.
 
 ```sh
 cd /home/iswad/DATA/05_Code/Projects/babyface-pro-linux
@@ -93,7 +101,7 @@ git send-email \
   --cc=skhan@linuxfoundation.org \
   --cc=rdunlap@infradead.org \
   --cc=linux-doc@vger.kernel.org \
-  patches/v7-00*.patch
+  patches/v8-00*.patch
 ```
 
 The last four Cc lines are the Documentation reviewers `get_maintainer.pl`
