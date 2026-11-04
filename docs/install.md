@@ -28,6 +28,13 @@ sudo dkms install -m snd-usb-babyface-pro -v 0.2.2
 sudo modprobe snd-usb-babyface-pro
 ```
 
+## Reloading the module
+
+`modprobe -r snd-usb-babyface-pro` fails with "Module is in use" while a sound
+server has the card open. `tools/kernel/reload.sh` reloads it, and when it
+cannot it lists the processes holding the card. `sh tools/kernel/reload.sh -a`
+stops PipeWire and WirePlumber for the reload and starts them again.
+
 ## Manual build
 
 For a one-off test without DKMS, see the build, load and hardware-check
