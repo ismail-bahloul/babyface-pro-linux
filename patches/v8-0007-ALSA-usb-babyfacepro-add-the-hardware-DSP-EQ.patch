@@ -1,4 +1,4 @@
-From 323b70d4fb2adf24ed422bb50710d864a2c4cc86 Mon Sep 17 00:00:00 2001
+From 38e655883a90126cded22a18dcd2395eaf9ca0b9 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:22 +0100
 Subject: [PATCH v8 7/8] ALSA: usb: babyfacepro: add the hardware DSP EQ
@@ -24,13 +24,13 @@ wrong for this file's signed Q27 math, and 'ang' is the CORDIC angle.
 
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---
- sound/usb/babyfacepro/babyfacepro-ctl.c | 612 +++++++++++++++++++++++-
- sound/usb/babyfacepro/babyfacepro.c     |  26 +
+ sound/usb/babyfacepro/babyfacepro-ctl.c | 610 +++++++++++++++++++++++-
+ sound/usb/babyfacepro/babyfacepro.c     |  59 ++-
  sound/usb/babyfacepro/babyfacepro.h     |  25 +-
- 3 files changed, 661 insertions(+), 2 deletions(-)
+ 3 files changed, 679 insertions(+), 15 deletions(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index 4ec43811b..9e76630b1 100644
+index 51cf8c7bd..a1b8caa28 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
 @@ -4,7 +4,8 @@
@@ -43,7 +43,7 @@ index 4ec43811b..9e76630b1 100644
   *
   * See babyfacepro.h for the shared device state and register map,
   * and babyfacepro.c for the core driver (protocol, PCM streaming,
-@@ -3404,3 +3405,612 @@ int babyface_create_panel(struct snd_usb_babyface *chip)
+@@ -3336,3 +3337,610 @@ int babyface_create_panel(struct snd_usb_babyface *chip)
  
  	return 0;
  }
@@ -579,24 +579,22 @@ index 4ec43811b..9e76630b1 100644
 +	if (param == 14)	/* slope enum items are 6/12/18/24 */
 +		nv = nv == 0 ? 6 : nv == 1 ? 12 : nv == 2 ? 18 : 24;
 +
-+	mutex_lock(&chip->mutex);
++	guard(mutex)(&chip->mutex);
 +	if (param == 0) {
 +		if (e->on != !!nv) {
 +			e->on = !!nv;
 +			ret = bf_eq_update_strip(chip, strip);
 +			if (ret < 0)
-+				goto out;
++				return ret;
 +			ret = 1;
 +		}
 +	} else if (v && *v != nv) {
 +		*v = nv;
 +		ret = bf_eq_update_strip(chip, strip);
 +		if (ret < 0)
-+			goto out;
++			return ret;
 +		ret = 1;
 +	}
-+out:
-+	mutex_unlock(&chip->mutex);
 +	return ret;
 +}
 +
@@ -657,10 +655,10 @@ index 4ec43811b..9e76630b1 100644
 +	return 0;
 +}
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index a67978750..7cd2afe74 100644
+index ece2bd0c4..ed17600ab 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
-@@ -1275,6 +1275,8 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
+@@ -1230,6 +1230,8 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
  		new_rate = true;
  		chip->alt = r->alt;
  		chip->frame_bytes = r->frame_bytes;
@@ -669,7 +667,7 @@ index a67978750..7cd2afe74 100644
  		dev_dbg(&chip->dev->dev, "rate %u Hz (alt %u)\n",
  			chip->rate, chip->alt);
  	}
-@@ -1691,6 +1693,8 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1638,6 +1640,8 @@ static int babyface_probe(struct usb_interface *intf,
  			BF_REF_LEVEL_4DBU : BF_REF_LEVEL_MINUS10DBV;
  	}
  
@@ -678,7 +676,7 @@ index a67978750..7cd2afe74 100644
  	/* The 0x16 clear zeroed the mixer registers: apply the factory
  	 * default routing to keep the outputs live out of the box.  alsactl
  	 * restores the user's settings once the card is registered.
-@@ -1708,6 +1712,7 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1654,6 +1658,7 @@ static int babyface_probe(struct usb_interface *intf,
  		dev_err(&intf->dev, "flag restore failed: %d\n", err);
  		goto error;
  	}
@@ -686,7 +684,7 @@ index a67978750..7cd2afe74 100644
  	/* Keep the allocation size independent of the active USB mode. */
  	urbsize = BF_WORDS_PER_FRAME * sizeof(u32) * chip->frames_per_urb;
  	chip->urbs_in = kcalloc(chip->nurbs, sizeof(*chip->urbs_in), GFP_KERNEL);
-@@ -1797,6 +1802,20 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1743,6 +1748,20 @@ static int babyface_probe(struct usb_interface *intf,
  	 */
  	chip->reprobe = bf_seen_before(dev);
  
@@ -707,20 +705,60 @@ index a67978750..7cd2afe74 100644
  	err = snd_card_register(chip->card);
  	if (err < 0) {
  		dev_err(&intf->dev, "snd_card_register failed: %d\n", err);
-@@ -1923,6 +1942,13 @@ static int babyface_resume(struct usb_interface *intf)
- 	if (err < 0)
- 		goto out;
- 	err = bf_state_apply_flags(chip);
+@@ -1838,6 +1857,31 @@ static int babyface_suspend(struct usb_interface *intf, pm_message_t message)
+ 	return 0;
+ }
+ 
++/* The register state of a resumed device.  Caller holds chip->mutex. */
++static int bf_resume_locked(struct snd_usb_babyface *chip)
++{
++	int err;
++
++	err = usb_set_interface(chip->dev, BF_IFACE, chip->alt);
 +	if (err < 0)
-+		goto out;
++		return err;
++	err = bf_cold_init(chip);
++	if (err < 0)
++		return err;
++	err = babyface_restore_state(chip);
++	if (err < 0)
++		return err;
++	err = bf_state_apply_flags(chip);
++	if (err < 0)
++		return err;
 +	/* The device lost its DSP across the suspend; the bulk EQ uploads
 +	 * are not part of the register state re-applied above, so re-send
 +	 * them.
 +	 */
 +	bf_eq_reupload(chip);
- out:
- 	mutex_unlock(&chip->mutex);
++	return 0;
++}
++
+ static int babyface_resume(struct usb_interface *intf)
+ {
+ 	struct snd_usb_babyface *chip = usb_get_intfdata(intf);
+@@ -1858,19 +1902,8 @@ static int babyface_resume(struct usb_interface *intf)
+ 	 * fail, and udev's alsactl restore then loads the mixer state
+ 	 * stored at the last shutdown over the current one.
+ 	 */
+-	mutex_lock(&chip->mutex);
+-	err = usb_set_interface(chip->dev, BF_IFACE, chip->alt);
+-	if (err < 0)
+-		goto out;
+-	err = bf_cold_init(chip);
+-	if (err < 0)
+-		goto out;
+-	err = babyface_restore_state(chip);
+-	if (err < 0)
+-		goto out;
+-	err = bf_state_apply_flags(chip);
+-out:
+-	mutex_unlock(&chip->mutex);
++	scoped_guard(mutex, &chip->mutex)
++		err = bf_resume_locked(chip);
  	if (!err)
+ 		babyface_panel_start(chip);
+ 	return err;
 diff --git a/sound/usb/babyfacepro/babyfacepro.h b/sound/usb/babyfacepro/babyfacepro.h
 index 984d1d175..c9ef366f1 100644
 --- a/sound/usb/babyfacepro/babyfacepro.h

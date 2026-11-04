@@ -13,6 +13,13 @@ paste, not a re-investigation.
 > Status 2026-10-31: v8 is cut as `patches/v8-*.patch` and lives on
 > `fix/sashiko-v8`, but it has **not been sent**.  The command below
 > targets v8; run it only after the driver PR is merged.
+>
+> Status 2026-11-04: Takashi replied to v7 on 2026-11-02 (guard()
+> macros, memcpy() in the PCM copies, an unbounded list in
+> `bf_seen_before()`, and a second look at Sashiko).  v8 was cut again
+> with those four answered, as branch `v8e` in `linux-next-src`; the
+> cover letter says so.  Still **not sent**, and still numbered v8 so
+> that the reply to his review is the version he reads next.
 
 ## Prerequisites (CachyOS/Arch)
 

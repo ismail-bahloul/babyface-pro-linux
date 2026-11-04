@@ -1,6 +1,6 @@
-From ed591838c086970dac556053e05d716be49c8518 Mon Sep 17 00:00:00 2001
+From 5dd32922b24a04c22d1861214fc2a622d373fe06 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
-Date: Tue Oct 27 11:13:22 2026 +0100
+Date: Wed, 4 Nov 2026 11:44:55 +0100
 Subject: [PATCH v8 0/8] ALSA: usb: add RME Babyface Pro driver (proprietary mode)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -12,14 +12,36 @@ This is v8 of the RME Babyface Pro proprietary-mode driver.  The split
 is unchanged from v5: a minimal core first, the mixer added piece by
 piece, suspend/resume near the end, the front panel and the DSP EQ
 last, and a design document.  The series is still based on
-next-20261026, so this is a fix round, not a rebase.
+next-20261026, so this is a fix round, not a rebase.  It answers your
+reply to v7: your three points are the first item below, and what I
+did with the Sashiko findings is the second.
 
-This is not an RFC.  Every point below is a fix to a defect found in
-review of v7, apart from the stereo split one, which a user reported
-from USB captures of the vendor software.  None of them changes the
-protocol or the control layout.
+This is not an RFC.  Apart from the stereo split one, which a user
+reported from USB captures of the vendor software, every point below
+is a fix to a defect found in review of v7, or a change you asked for.
+None of them changes the protocol or the control layout.
 
 Changes since v7:
+
+ - Your comments on v7.  The mutexes, the spinlocks, the RCU read
+   sides and the PCM stream locks use guard(), scoped_guard() and
+   guard(rcu) in place of paired lock and unlock calls with goto
+   labels, so the driver has no manual lock handling left.  Each
+   critical section covers the same code as before, and the places that
+   used to jump to an unlock label now return.  The per-channel loops
+   in babyface_capture_copy() and babyface_playback_copy() are one
+   memcpy() of the words the frame and the stream have in common, and a
+   memset() of the rest: the words are S32_LE with 24 msbits on both
+   sides, so they go over as they are.  bf_seen_before() keeps the last
+   eight units it saw in a fixed table (patch 6) instead of a list that
+   grew with every unit; a unit pushed out by eight newer ones is taken
+   for a first probe again.
+
+ - Sashiko.  I went through its findings on v7 again.  The ones that
+   hold are fixed in the items below.  Two I left alone: the control
+   names, which stay as they are (see patch 3), and the module
+   parameters it wants in kernel-parameters.txt, which documents the
+   kernel's own; the driver's are in the Kconfig help and in patch 8.
 
  - Probe and stream (patch 1).  probe() returned 0 after freeing the
    card when an URB or DMA buffer allocation failed; it now returns
@@ -162,10 +184,10 @@ Ismaïl Bahloul (8):
  sound/usb/Kconfig                          |   17 +
  sound/usb/Makefile                         |    2 +-
  sound/usb/babyfacepro/Makefile             |    4 +
- sound/usb/babyfacepro/babyfacepro-ctl.c    | 4016 ++++++++++++++++++++
- sound/usb/babyfacepro/babyfacepro.c        | 1991 ++++++++++
+ sound/usb/babyfacepro/babyfacepro-ctl.c    | 3946 ++++++++++++++++++++
+ sound/usb/babyfacepro/babyfacepro.c        | 1943 ++++++++++
  sound/usb/babyfacepro/babyfacepro.h        |  568 +++
- 9 files changed, 6822 insertions(+), 1 deletion(-)
+ 9 files changed, 6704 insertions(+), 1 deletion(-)
  create mode 100644 Documentation/sound/cards/babyface-pro.rst
  create mode 100644 sound/usb/babyfacepro/Makefile
  create mode 100644 sound/usb/babyfacepro/babyfacepro-ctl.c

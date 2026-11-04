@@ -268,59 +268,38 @@ int bf_cold_init(struct snd_usb_babyface *chip)
 	return 0;
 }
 
-/* Units probed since the module was loaded.
+/* The last few units probed since the module was loaded.
  * The SELECT selection is not in the readback, and the values alsactl
  * restores right after a probe are the ones of the last alsactl store.
  * After a boot that is the last shutdown, the newest there is.  A later
  * probe of the same unit (a usbfs claim released, an unbind, a replug)
  * may follow SELECT presses made since, so bf_panel_select_put() needs
- * to tell the two apart.
+ * to tell the two apart.  The table is fixed, so it cannot grow with the
+ * number of units seen: one that has been pushed out by BF_SEEN_MAX newer
+ * ones is taken for a first probe again.
  */
-struct bf_seen {
-	struct list_head list;
-	char *key;
-};
+#define BF_SEEN_MAX	8
+#define BF_SEEN_KEYLEN	64
 
-static LIST_HEAD(bf_seen_list);
+static char bf_seen_keys[BF_SEEN_MAX][BF_SEEN_KEYLEN];
+static unsigned int bf_seen_next;
 static DEFINE_MUTEX(bf_seen_mutex);
 
 /* Record the unit and return whether it was probed before. */
 static bool bf_seen_before(struct usb_device *dev)
 {
-	const char *key = dev->serial ? dev->serial : dev_name(&dev->dev);
-	struct bf_seen *s;
-	bool seen = false;
+	const char *key = dev->serial && *dev->serial ? dev->serial :
+			  dev_name(&dev->dev);
+	unsigned int i;
 
-	mutex_lock(&bf_seen_mutex);
-	list_for_each_entry(s, &bf_seen_list, list) {
-		if (!strcmp(s->key, key)) {
-			seen = true;
-			break;
-		}
+	guard(mutex)(&bf_seen_mutex);
+	for (i = 0; i < BF_SEEN_MAX; i++) {
+		if (!strncmp(bf_seen_keys[i], key, BF_SEEN_KEYLEN - 1))
+			return true;
 	}
-	if (!seen) {
-		s = kzalloc_obj(*s, GFP_KERNEL);
-		if (s) {
-			s->key = kstrdup(key, GFP_KERNEL);
-			if (s->key)
-				list_add_tail(&s->list, &bf_seen_list);
-			else
-				kfree(s);
-		}
-	}
-	mutex_unlock(&bf_seen_mutex);
-	return seen;
-}
-
-static void bf_seen_purge(void)
-{
-	struct bf_seen *s, *tmp;
-
-	list_for_each_entry_safe(s, tmp, &bf_seen_list, list) {
-		list_del(&s->list);
-		kfree(s->key);
-		kfree(s);
-	}
+	strscpy(bf_seen_keys[bf_seen_next], key, BF_SEEN_KEYLEN);
+	bf_seen_next = (bf_seen_next + 1) % BF_SEEN_MAX;
+	return false;
 }
 
 /* Re-apply the whole cached mixer state after a resume (the device
@@ -507,39 +486,31 @@ static bool babyface_capture_copy(struct snd_usb_babyface *chip,
 	unsigned int buf_frames = rt->buffer_size;
 	unsigned int words = chip->frame_bytes / 4;
 	unsigned int chans = rt->channels;
-	unsigned int pos, f, i;
+	unsigned int copy = min(chans, words) * 4;
+	unsigned int pos, f;
 	unsigned long new_period;
 	bool crossed = false;
 	u8 *dst;
 
-	spin_lock(&chip->lock);
+	guard(spinlock)(&chip->lock);
 	pos = chip->hw_ptr[SNDRV_PCM_STREAM_CAPTURE] % buf_frames;
 	for (f = 0; f < frames; f++) {
-		const __le32 *w = (const __le32 *)(data + f * chip->frame_bytes);
-
 		dst = rt->dma_area + frames_to_bytes(rt, pos);
-		for (i = 0; i < chans; i++) {
-			/* The frame carries the device's own order: AN1-4,
-			 * AS1/2, then ADAT3-8 (AS1/2 is the first optical
-			 * pair, so it is ADAT 1/2 when the input receives
-			 * ADAT and S/PDIF when it receives S/PDIF).  The
-			 * PCM follows it one-to-one, so a channel is word i
-			 * and the device order is what an application sees.
-			 * Confirmed live on 2026-10-17 with the device's own
-			 * loopback: a tone on the AS1/2 output bus appeared
-			 * on words 4/5.  At 96/192 kHz the frame has fewer
-			 * words (10/8); the channels past them read as zero.
-			 */
-			s32 s = 0;
-
-			if (i < words) {
-				/* 24-bit sample in bits 31-8 of the 32-bit word;
-				 * S32_LE with 24 msbits, so copy the word as-is.
-				 */
-				s = (s32)le32_to_cpu(w[i]);
-			}
-			put_unaligned_le32((u32)s, dst + i * 4);
-		}
+		/* The frame carries the device's own order: AN1-4, AS1/2,
+		 * then ADAT3-8 (AS1/2 is the first optical pair, so it is
+		 * ADAT 1/2 when the input receives ADAT and S/PDIF when it
+		 * receives S/PDIF).  The PCM follows it one-to-one, so a
+		 * channel is word i and the device order is what an
+		 * application sees.  Confirmed live on 2026-10-17 with the
+		 * device's own loopback: a tone on the AS1/2 output bus
+		 * appeared on words 4/5.  Each word is a 24-bit sample in
+		 * bits 31-8, which is S32_LE with 24 msbits, so the words go
+		 * over as they are.  At 96/192 kHz the frame has fewer words
+		 * (10/8); the channels past them read as zero.
+		 */
+		memcpy(dst, data + f * chip->frame_bytes, copy);
+		if (chans > words)
+			memset(dst + copy, 0, (chans - words) * 4);
 		pos++;
 		if (pos >= buf_frames)
 			pos = 0;
@@ -550,7 +521,6 @@ static bool babyface_capture_copy(struct snd_usb_babyface *chip,
 		chip->prev_period[SNDRV_PCM_STREAM_CAPTURE] = new_period;
 		crossed = true;
 	}
-	spin_unlock(&chip->lock);
 
 	return crossed;
 }
@@ -563,12 +533,13 @@ static bool babyface_playback_copy(struct snd_usb_babyface *chip,
 	unsigned int buf_frames = rt->buffer_size;
 	unsigned int words = chip->frame_bytes / 4;
 	unsigned int chans = rt->channels;
-	unsigned int pos, f, i;
+	unsigned int copy = min(chans, words) * 4;
+	unsigned int pos, f;
 	unsigned long new_period;
 	bool crossed = false;
 	const u8 *src;
 
-	spin_lock(&chip->lock);
+	guard(spinlock)(&chip->lock);
 	/* Copy the ring as it is and move the pointer on by the whole URB,
 	 * as a DMA engine reading the buffer would: the device plays every
 	 * frame of the URB.  Whether the application has written them is
@@ -580,23 +551,17 @@ static bool babyface_playback_copy(struct snd_usb_babyface *chip,
 	 */
 	pos = chip->hw_ptr[SNDRV_PCM_STREAM_PLAYBACK] % buf_frames;
 	for (f = 0; f < frames; f++) {
-		__le32 *w = (__le32 *)(data + f * chip->frame_bytes);
+		u8 *frame = data + f * chip->frame_bytes;
 
 		src = rt->dma_area + frames_to_bytes(rt, pos);
 		/* App ch n feeds the device word n (PB1-6 = words 0-11);
-		 * words 12/13 stay zero.  At 96/192 kHz the frame is
-		 * shorter - the extra app channels are dropped.
+		 * words 12/13 stay zero.  The app's 24 valid bits are already
+		 * left-justified (bits 31-8), so the words go over as they
+		 * are.  At 96/192 kHz the frame is shorter - the extra app
+		 * channels are dropped.
 		 */
-		for (i = 0; i < chans && i < words; i++) {
-			u32 s = get_unaligned_le32(src + i * 4);
-
-			/* S32_LE msbits=24: the app's 24 valid bits are already
-			 * left-justified (bits 31-8) - copy the word as-is.
-			 */
-			w[i] = cpu_to_le32(s);
-		}
-		for (; i < words; i++)
-			w[i] = 0;
+		memcpy(frame, src, copy);
+		memset(frame + copy, 0, words * 4 - copy);
 		pos++;
 		if (pos >= buf_frames)
 			pos = 0;
@@ -607,7 +572,6 @@ static bool babyface_playback_copy(struct snd_usb_babyface *chip,
 		chip->prev_period[SNDRV_PCM_STREAM_PLAYBACK] = new_period;
 		crossed = true;
 	}
-	spin_unlock(&chip->lock);
 
 	return crossed;
 }
@@ -654,21 +618,50 @@ static void babyface_urb_resubmit_failed(struct snd_usb_babyface *chip)
 /* An OUT URB that is not resubmitted leaves the queue. */
 static void bf_out_lost(struct snd_usb_babyface *chip)
 {
-	unsigned long flags;
-
-	spin_lock_irqsave(&chip->lock, flags);
+	guard(spinlock_irqsave)(&chip->lock);
 	if (chip->out_inflight)
 		chip->out_inflight--;
-	spin_unlock_irqrestore(&chip->lock, flags);
+}
+
+/* The frames of a completed IN URB go to the capture substream if it
+ * runs; true when that crossed a period boundary.
+ */
+static bool babyface_capture_urb(struct snd_usb_babyface *chip,
+				 struct snd_pcm_substream *subs,
+				 struct urb *urb)
+{
+	unsigned int frames;
+
+	guard(pcm_stream_lock_irqsave)(subs);
+	if (!snd_pcm_running(subs))
+		return false;
+	frames = urb->actual_length / chip->frame_bytes;
+	if (!frames)
+		return false;
+	return babyface_capture_copy(chip, subs, urb->transfer_buffer, frames);
+}
+
+/* The playback substream, if it runs, fills a completed OUT URB: *fed
+ * says whether it did, and the return value whether that crossed a
+ * period boundary.
+ */
+static bool babyface_playback_urb(struct snd_usb_babyface *chip,
+				  struct snd_pcm_substream *subs,
+				  struct urb *urb, bool *fed)
+{
+	guard(pcm_stream_lock_irqsave)(subs);
+	if (!snd_pcm_running(subs))
+		return false;
+	*fed = true;
+	return babyface_playback_copy(chip, subs, urb->transfer_buffer,
+				      urb->transfer_buffer_length /
+				      chip->frame_bytes);
 }
 
 static void babyface_complete_in(struct urb *urb)
 {
 	struct snd_usb_babyface *chip = urb->context;
 	struct snd_pcm_substream *subs;
-	unsigned long flags;
-	unsigned int frames;
-	bool crossed = false;
 	int ret;
 
 	if (urb->status < 0) {
@@ -682,29 +675,17 @@ static void babyface_complete_in(struct urb *urb)
 		goto resubmit;
 	}
 	babyface_urb_ok(chip);
-	spin_lock_irqsave(&chip->lock, flags);
-	chip->in_done = ktime_get();
-	spin_unlock_irqrestore(&chip->lock, flags);
+	scoped_guard(spinlock_irqsave, &chip->lock)
+		chip->in_done = ktime_get();
 
 	/* The session outlives a substream that is closed while the other
 	 * direction still runs: close() waits out this RCU section.
 	 */
-	rcu_read_lock();
-	subs = rcu_dereference(chip->subs[SNDRV_PCM_STREAM_CAPTURE]);
-	if (subs) {
-		snd_pcm_stream_lock_irqsave(subs, flags);
-		if (snd_pcm_running(subs)) {
-			frames = urb->actual_length / chip->frame_bytes;
-			if (frames)
-				crossed = babyface_capture_copy(chip, subs,
-								urb->transfer_buffer,
-								frames);
-		}
-		snd_pcm_stream_unlock_irqrestore(subs, flags);
-		if (crossed)
+	scoped_guard(rcu) {
+		subs = rcu_dereference(chip->subs[SNDRV_PCM_STREAM_CAPTURE]);
+		if (subs && babyface_capture_urb(chip, subs, urb))
 			snd_pcm_period_elapsed(subs);
 	}
-	rcu_read_unlock();
 resubmit:
 	/* The session is being stopped: babyface_stream_kill() clears
 	 * ->streaming before it kills the URBs.  A resubmit now would only
@@ -724,9 +705,6 @@ static void babyface_complete_out(struct urb *urb)
 {
 	struct snd_usb_babyface *chip = urb->context;
 	struct snd_pcm_substream *subs;
-	unsigned long flags;
-	unsigned int frames;
-	bool crossed = false;
 	bool fed = false;
 	int ret;
 
@@ -744,21 +722,11 @@ static void babyface_complete_out(struct urb *urb)
 	}
 	babyface_urb_ok(chip);
 
-	rcu_read_lock();
-	subs = rcu_dereference(chip->subs[SNDRV_PCM_STREAM_PLAYBACK]);
-	if (subs) {
-		snd_pcm_stream_lock_irqsave(subs, flags);
-		if (snd_pcm_running(subs)) {
-			frames = urb->transfer_buffer_length / chip->frame_bytes;
-			crossed = babyface_playback_copy(chip, subs,
-							 urb->transfer_buffer, frames);
-			fed = true;
-		}
-		snd_pcm_stream_unlock_irqrestore(subs, flags);
-		if (crossed)
+	scoped_guard(rcu) {
+		subs = rcu_dereference(chip->subs[SNDRV_PCM_STREAM_PLAYBACK]);
+		if (subs && babyface_playback_urb(chip, subs, urb, &fed))
 			snd_pcm_period_elapsed(subs);
 	}
-	rcu_read_unlock();
 	/* Nothing playing (no substream, or one that is set up but stopped,
 	 * e.g. between an xrun and the restart): send silence, not the
 	 * audio this URB carried last time round.
@@ -811,22 +779,19 @@ void babyface_stream_kill(struct snd_usb_babyface *chip)
  */
 void babyface_pcm_stop_both(struct snd_usb_babyface *chip, snd_pcm_state_t state)
 {
-	unsigned long flags;
 	int s;
 
 	/* close() waits out this RCU section, as for the URB handlers. */
-	rcu_read_lock();
+	guard(rcu)();
 	for (s = 0; s < 2; s++) {
 		struct snd_pcm_substream *subs = rcu_dereference(chip->subs[s]);
 
 		if (!subs)
 			continue;
-		snd_pcm_stream_lock_irqsave(subs, flags);
+		guard(pcm_stream_lock_irqsave)(subs);
 		if (snd_pcm_running(subs))
 			snd_pcm_stop(subs, state);
-		snd_pcm_stream_unlock_irqrestore(subs, flags);
 	}
-	rcu_read_unlock();
 }
 
 /* Stream model (big picture):
@@ -920,10 +885,10 @@ static int babyface_stream_start(struct snd_usb_babyface *chip)
 	 * are still running, and ->streaming is what says the session is
 	 * theirs to keep going.  The error path clears it again.
 	 */
-	spin_lock_irq(&chip->lock);
-	chip->out_inflight = chip->urbs_active;
-	chip->in_done = ktime_get();
-	spin_unlock_irq(&chip->lock);
+	scoped_guard(spinlock_irq, &chip->lock) {
+		chip->out_inflight = chip->urbs_active;
+		chip->in_done = ktime_get();
+	}
 	WRITE_ONCE(chip->streaming, true);
 	for (i = 0; i < chip->urbs_active; i++) {
 		ret = usb_submit_urb(chip->urbs_in[i], GFP_KERNEL);
@@ -959,7 +924,7 @@ void babyface_stream_work(struct work_struct *work)
 	struct snd_usb_babyface *chip =
 		container_of(work, struct snd_usb_babyface, stream_work);
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (!chip->shutdown &&
 	    atomic_read(&chip->urb_err) >= BF_URB_ERR_STOP) {
 		dev_err(&chip->dev->dev,
@@ -970,7 +935,6 @@ void babyface_stream_work(struct work_struct *work)
 		babyface_pcm_stop_both(chip, SNDRV_PCM_STATE_XRUN);
 		atomic_set(&chip->urb_err, 0);
 	}
-	mutex_unlock(&chip->mutex);
 }
 
 static const struct snd_pcm_hardware babyface_pcm_hw = {
@@ -1089,11 +1053,11 @@ static int bf_hw_rule_rate(struct snd_pcm_hw_params *params,
 	struct snd_interval t = { .integer = 1 };
 	bool held;
 
-	mutex_lock(&chip->mutex);
-	held = bf_other_holds_clock(chip, subs);
-	t.min = chip->rate;
-	t.max = chip->rate;
-	mutex_unlock(&chip->mutex);
+	scoped_guard(mutex, &chip->mutex) {
+		held = bf_other_holds_clock(chip, subs);
+		t.min = chip->rate;
+		t.max = chip->rate;
+	}
 	if (!held)
 		return 0;
 	return snd_interval_refine(hw_param_interval(params,
@@ -1112,10 +1076,10 @@ static int bf_hw_rule_period(struct snd_pcm_hw_params *params,
 	struct snd_interval t = { .integer = 1, .max = UINT_MAX };
 	bool held;
 
-	mutex_lock(&chip->mutex);
-	held = bf_other_holds_clock(chip, subs);
-	t.min = bf_session_period(chip);
-	mutex_unlock(&chip->mutex);
+	scoped_guard(mutex, &chip->mutex) {
+		held = bf_other_holds_clock(chip, subs);
+		t.min = bf_session_period(chip);
+	}
 	if (!held)
 		return 0;
 	return snd_interval_refine(hw_param_interval(params,
@@ -1126,7 +1090,6 @@ static int babyface_pcm_open(struct snd_pcm_substream *subs)
 {
 	struct snd_usb_babyface *chip = snd_pcm_substream_chip(subs);
 	struct snd_pcm_runtime *rt = subs->runtime;
-	unsigned long flags;
 	int ret;
 
 	rt->hw = babyface_pcm_hw;
@@ -1171,33 +1134,28 @@ static int babyface_pcm_open(struct snd_pcm_substream *subs)
 	 * that all active ASIO clients share one rate, with WDM (or CoreAudio)
 	 * doing any conversion - never the driver.
 	 */
-	mutex_lock(&chip->mutex);
-	chip->owner[subs->stream] = task_tgid_nr(current);
-	mutex_unlock(&chip->mutex);
+	scoped_guard(mutex, &chip->mutex)
+		chip->owner[subs->stream] = task_tgid_nr(current);
 	ret = snd_pcm_hw_rule_add(rt, 0, SNDRV_PCM_HW_PARAM_RATE,
 				  bf_hw_rule_rate, subs,
 				  SNDRV_PCM_HW_PARAM_RATE, -1);
 	if (ret < 0)
 		return ret;
 
-	spin_lock_irqsave(&chip->lock, flags);
-	rcu_assign_pointer(chip->subs[subs->stream], subs);
-	spin_unlock_irqrestore(&chip->lock, flags);
+	scoped_guard(spinlock_irqsave, &chip->lock)
+		rcu_assign_pointer(chip->subs[subs->stream], subs);
 	return 0;
 }
 
 static int babyface_pcm_close(struct snd_pcm_substream *subs)
 {
 	struct snd_usb_babyface *chip = snd_pcm_substream_chip(subs);
-	unsigned long flags;
 
 	flush_work(&chip->stream_work);
-	mutex_lock(&chip->mutex);
-	chip->owner[subs->stream] = 0;
-	mutex_unlock(&chip->mutex);
-	spin_lock_irqsave(&chip->lock, flags);
-	RCU_INIT_POINTER(chip->subs[subs->stream], NULL);
-	spin_unlock_irqrestore(&chip->lock, flags);
+	scoped_guard(mutex, &chip->mutex)
+		chip->owner[subs->stream] = 0;
+	scoped_guard(spinlock_irqsave, &chip->lock)
+		RCU_INIT_POINTER(chip->subs[subs->stream], NULL);
 	/* The session keeps running while the other direction is set up,
 	 * so a URB handler may still hold this substream: wait for it
 	 * before the core frees the runtime.
@@ -1235,12 +1193,10 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 		return -EINVAL;
 	}
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	/* disconnect() has let go of the interface: do not re-point it. */
-	if (chip->shutdown) {
-		ret = -ENODEV;
-		goto out;
-	}
+	if (chip->shutdown)
+		return -ENODEV;
 	if (r->rate != chip->rate) {
 		/* The rule in open() normally means no other application
 		 * asks for a rate other than the running one.  It can still
@@ -1254,8 +1210,7 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 			dev_dbg(&chip->dev->dev,
 				"rate %u Hz refused: %u Hz stream set up\n",
 				r->rate, chip->rate);
-			ret = -EBUSY;
-			goto out;
+			return -EBUSY;
 		}
 		/* Nothing else holds the clock.  Stop the session and
 		 * re-point the bandwidth class; prepare starts a new session
@@ -1270,7 +1225,7 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 		}
 		ret = usb_set_interface(chip->dev, BF_IFACE, r->alt);
 		if (ret < 0)
-			goto out;
+			return ret;
 		chip->rate = r->rate;
 		new_rate = true;
 		chip->alt = r->alt;
@@ -1291,10 +1246,8 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 	 * prepare starts the next.
 	 */
 	if (bf_other_holds_clock(chip, subs)) {
-		if (params_period_size(params) < bf_session_period(chip)) {
-			ret = -EBUSY;
-			goto out;
-		}
+		if (params_period_size(params) < bf_session_period(chip))
+			return -EBUSY;
 	} else if (new_rate || !chip->stream_setup[!subs->stream] ||
 		   chip->session_dir == subs->stream ||
 		   params_period_size(params) < bf_session_period(chip)) {
@@ -1336,8 +1289,7 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 		chip->stream_setup[subs->stream] = true;
 		chip->stream_users++;
 	}
-out:
-	mutex_unlock(&chip->mutex);
+
 	return ret;
 }
 
@@ -1346,7 +1298,7 @@ static int babyface_pcm_hw_free(struct snd_pcm_substream *subs)
 {
 	struct snd_usb_babyface *chip = snd_pcm_substream_chip(subs);
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (chip->stream_setup[subs->stream]) {
 		chip->stream_setup[subs->stream] = false;
 		if (--chip->stream_users == 0 && chip->streaming) {
@@ -1354,7 +1306,6 @@ static int babyface_pcm_hw_free(struct snd_pcm_substream *subs)
 			dev_dbg(&chip->dev->dev, "stream stopped\n");
 		}
 	}
-	mutex_unlock(&chip->mutex);
 	return 0;
 }
 
@@ -1364,35 +1315,33 @@ static int babyface_pcm_hw_free(struct snd_pcm_substream *subs)
 static int babyface_pcm_prepare(struct snd_pcm_substream *subs)
 {
 	struct snd_usb_babyface *chip = snd_pcm_substream_chip(subs);
-	unsigned long flags;
 	int ret = 0;
 
-	mutex_lock(&chip->mutex);
-	if (chip->shutdown)
-		ret = -ENODEV;
-	else if (subs->runtime->rate != chip->rate ||
-		 subs->runtime->period_size < bf_session_period(chip))
-		/* The other direction changed the rate or the URBs since
-		 * this one was set up: it has to be set up again.
-		 */
-		ret = -EINVAL;
-	else if (!chip->streaming)
-		ret = babyface_stream_start(chip);
-	mutex_unlock(&chip->mutex);
+	scoped_guard(mutex, &chip->mutex) {
+		if (chip->shutdown)
+			ret = -ENODEV;
+		else if (subs->runtime->rate != chip->rate ||
+			 subs->runtime->period_size < bf_session_period(chip))
+			/* The other direction changed the rate or the URBs since
+			 * this one was set up: it has to be set up again.
+			 */
+			ret = -EINVAL;
+		else if (!chip->streaming)
+			ret = babyface_stream_start(chip);
+	}
 	if (ret < 0)
 		return ret;
 
-	spin_lock_irqsave(&chip->lock, flags);
-	chip->hw_ptr[subs->stream] = 0;
-	chip->prev_period[subs->stream] = 0;
-	spin_unlock_irqrestore(&chip->lock, flags);
+	scoped_guard(spinlock_irqsave, &chip->lock) {
+		chip->hw_ptr[subs->stream] = 0;
+		chip->prev_period[subs->stream] = 0;
+	}
 	return 0;
 }
 
 static int babyface_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 {
 	struct snd_usb_babyface *chip = snd_pcm_substream_chip(subs);
-	unsigned long flags;
 
 	switch (cmd) {
 	/* The session runs from prepare to hw_free; START and STOP only
@@ -1411,10 +1360,10 @@ static int babyface_pcm_trigger(struct snd_pcm_substream *subs, int cmd)
 		if (subs->runtime->rate != chip->rate ||
 		    subs->runtime->period_size < bf_session_period(chip))
 			return -EPIPE;
-		spin_lock_irqsave(&chip->lock, flags);
-		chip->hw_ptr[subs->stream] = 0;
-		chip->prev_period[subs->stream] = 0;
-		spin_unlock_irqrestore(&chip->lock, flags);
+		scoped_guard(spinlock_irqsave, &chip->lock) {
+			chip->hw_ptr[subs->stream] = 0;
+			chip->prev_period[subs->stream] = 0;
+		}
 		return 0;
 	case SNDRV_PCM_TRIGGER_STOP:
 		return 0;
@@ -1478,13 +1427,11 @@ static snd_pcm_uframes_t bf_delay(struct snd_usb_babyface *chip,
 static snd_pcm_uframes_t babyface_pcm_pointer(struct snd_pcm_substream *subs)
 {
 	struct snd_usb_babyface *chip = snd_pcm_substream_chip(subs);
-	unsigned long flags;
 	snd_pcm_uframes_t pos;
 
-	spin_lock_irqsave(&chip->lock, flags);
+	guard(spinlock_irqsave)(&chip->lock);
 	pos = chip->hw_ptr[subs->stream] % subs->runtime->buffer_size;
 	subs->runtime->delay = bf_delay(chip, subs);
-	spin_unlock_irqrestore(&chip->lock, flags);
 	return pos;
 }
 
@@ -1705,9 +1652,8 @@ static int babyface_probe(struct usb_interface *intf,
 		goto error;
 	}
 	/* The cold init cleared the flag registers as well. */
-	mutex_lock(&chip->mutex);
-	err = bf_state_apply_flags(chip);
-	mutex_unlock(&chip->mutex);
+	scoped_guard(mutex, &chip->mutex)
+		err = bf_state_apply_flags(chip);
 	if (err < 0) {
 		dev_err(&intf->dev, "flag restore failed: %d\n", err);
 		goto error;
@@ -1864,10 +1810,10 @@ static void babyface_disconnect(struct usb_interface *intf)
 	 * the mutex also waits out a prepare that was already past its
 	 * ->shutdown check.
 	 */
-	mutex_lock(&chip->mutex);
-	if (chip->streaming)
-		babyface_stream_kill(chip);
-	mutex_unlock(&chip->mutex);
+	scoped_guard(mutex, &chip->mutex) {
+		if (chip->streaming)
+			babyface_stream_kill(chip);
+	}
 	cancel_work_sync(&chip->stream_work);
 	babyface_panel_stop(chip);
 	/* Balance the probe()-time usb_disable_autosuspend(): the usb_device
@@ -1902,12 +1848,37 @@ static int babyface_suspend(struct usb_interface *intf, pm_message_t message)
 			snd_pcm_suspend_all(sdev->device_data);
 	}
 	/* The URB handlers queue the work: kill them first. */
-	mutex_lock(&chip->mutex);
-	if (chip->streaming)
-		babyface_stream_kill(chip);
-	mutex_unlock(&chip->mutex);
+	scoped_guard(mutex, &chip->mutex) {
+		if (chip->streaming)
+			babyface_stream_kill(chip);
+	}
 	cancel_work_sync(&chip->stream_work);
 	babyface_panel_stop(chip);
+	return 0;
+}
+
+/* The register state of a resumed device.  Caller holds chip->mutex. */
+static int bf_resume_locked(struct snd_usb_babyface *chip)
+{
+	int err;
+
+	err = usb_set_interface(chip->dev, BF_IFACE, chip->alt);
+	if (err < 0)
+		return err;
+	err = bf_cold_init(chip);
+	if (err < 0)
+		return err;
+	err = babyface_restore_state(chip);
+	if (err < 0)
+		return err;
+	err = bf_state_apply_flags(chip);
+	if (err < 0)
+		return err;
+	/* The device lost its DSP across the suspend; the bulk EQ uploads
+	 * are not part of the register state re-applied above, so re-send
+	 * them.
+	 */
+	bf_eq_reupload(chip);
 	return 0;
 }
 
@@ -1931,26 +1902,8 @@ static int babyface_resume(struct usb_interface *intf)
 	 * fail, and udev's alsactl restore then loads the mixer state
 	 * stored at the last shutdown over the current one.
 	 */
-	mutex_lock(&chip->mutex);
-	err = usb_set_interface(chip->dev, BF_IFACE, chip->alt);
-	if (err < 0)
-		goto out;
-	err = bf_cold_init(chip);
-	if (err < 0)
-		goto out;
-	err = babyface_restore_state(chip);
-	if (err < 0)
-		goto out;
-	err = bf_state_apply_flags(chip);
-	if (err < 0)
-		goto out;
-	/* The device lost its DSP across the suspend; the bulk EQ uploads
-	 * are not part of the register state re-applied above, so re-send
-	 * them.
-	 */
-	bf_eq_reupload(chip);
-out:
-	mutex_unlock(&chip->mutex);
+	scoped_guard(mutex, &chip->mutex)
+		err = bf_resume_locked(chip);
 	if (!err)
 		babyface_panel_start(chip);
 	return err;
@@ -1980,7 +1933,6 @@ static int __init babyface_init(void)
 static void __exit babyface_exit(void)
 {
 	usb_deregister(&babyface_driver);
-	bf_seen_purge();
 }
 
 module_init(babyface_init);
