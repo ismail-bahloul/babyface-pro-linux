@@ -380,9 +380,9 @@ static int bf_master_put(struct snd_kcontrol *kctl,
 	l = nl;
 	r = nr;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (l == chip->master[out][0] && r == chip->master[out][1])
-		goto out;
+		return 0;
 
 	muted = chip->muted[out];
 	dim = out == 1 && chip->dim;
@@ -395,21 +395,21 @@ static int bf_master_put(struct snd_kcontrol *kctl,
 	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, l),
 			      BF_REG_MASTER_8 + 2 * out);
 	if (ret < 0)
-		goto out;
+		return ret;
 	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_out_reg8(muted, dim, r),
 			      BF_REG_MASTER_8 + 2 * out + 1);
 	if (ret < 0)
-		goto out;
+		return ret;
 	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
 			      bf_out_reg16(muted, dim, l),
 			      (BF_REG_MASTER_16 + 2 * out) | flag);
 	if (ret < 0)
-		goto out;
+		return ret;
 	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
 			      bf_out_reg16(muted, dim, r),
 			      (BF_REG_MASTER_16 + 2 * out + 1) | flag);
 	if (ret < 0)
-		goto out;
+		return ret;
 
 	chip->master[out][0] = l;
 	chip->master[out][1] = r;
@@ -418,10 +418,7 @@ static int bf_master_put(struct snd_kcontrol *kctl,
 		chip->dim_saved[0] = l;
 		chip->dim_saved[1] = r;
 	}
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 static int bf_mute_info(struct snd_kcontrol *kctl,
@@ -459,9 +456,9 @@ static int bf_mute_put(struct snd_kcontrol *kctl,
 	u16 flag;
 	int ret = 0;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (muted == chip->muted[out])
-		goto out;
+		return 0;
 
 	dim = out == 1 && chip->dim;
 	flag = bf_flag_cycle[chip->flag_cnt];
@@ -474,27 +471,24 @@ static int bf_mute_put(struct snd_kcontrol *kctl,
 			      bf_out_reg8(muted, dim, chip->master[out][0]),
 			      BF_REG_MASTER_8 + 2 * out);
 	if (ret < 0)
-		goto out;
+		return ret;
 	ret = bf_vendor_write(chip, BF_REQ_GAIN,
 			      bf_out_reg8(muted, dim, chip->master[out][1]),
 			      BF_REG_MASTER_8 + 2 * out + 1);
 	if (ret < 0)
-		goto out;
+		return ret;
 	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
 			      bf_out_reg16(muted, dim, chip->master[out][0]),
 			      (BF_REG_MASTER_16 + 2 * out) | flag);
 	if (ret < 0)
-		goto out;
+		return ret;
 	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
 			      bf_out_reg16(muted, dim, chip->master[out][1]),
 			      (BF_REG_MASTER_16 + 2 * out + 1) | flag);
 	if (ret < 0)
-		goto out;
+		return ret;
 	chip->muted[out] = muted;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 /* The crosspoint fader is linear in amplitude: BF_FADER_0DB (0x16a0) is
@@ -584,20 +578,17 @@ static int bf_xpoint_put(struct snd_kcontrol *kctl,
 	l = nl;
 	r = nr;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (l == chip->xpoint[out][src][0] && r == chip->xpoint[out][src][1])
-		goto out;
+		return 0;
 
 	ret = bf_xpoint_write(chip, out, src, l, r);
 	if (ret < 0)
-		goto out;
+		return ret;
 
 	chip->xpoint[out][src][0] = l;
 	chip->xpoint[out][src][1] = r;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 int babyface_create_xpoints(struct snd_usb_babyface *chip)
@@ -791,17 +782,14 @@ static int bf_phase_put(struct snd_kcontrol *kctl,
 	bool invert = ucontrol->value.integer.value[0];
 	int ret = 0;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (invert == chip->phase[mic])
-		goto out;
+		return 0;
 	ret = bf_phase_apply(chip, mic, invert);
 	if (ret < 0)
-		goto out;
+		return ret;
 	chip->phase[mic] = invert;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 /* Stereo split (PROTOCOL.md "Stereo split", cap_ctrl3.pcap, hardware-
@@ -854,17 +842,14 @@ static int bf_split_put(struct snd_kcontrol *kctl,
 	bool split = ucontrol->value.integer.value[0];
 	int ret = 0;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (split == chip->split[pb])
-		goto out;
+		return 0;
 	ret = bf_split_apply(chip, pb, split);
 	if (ret < 0)
-		goto out;
+		return ret;
 	chip->split[pb] = split;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 /* MIX-mode monitoring level (fader curve).
@@ -1030,22 +1015,21 @@ static int bf_trim_put(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *uco
 	if (db < -65 || db > 6)
 		return -EINVAL;
 
-	mutex_lock(&chip->mutex);
-	if (db == chip->trim[mic])
-		goto out;
-	ret = bf_trim_apply(chip, mic, db * 2);
-	if (ret < 0)
-		goto out;
-	/* One register per pair on the wire, so both channels of the pair
-	 * really did change: mirror the cache (the state restore replays
-	 * the pair from the even index) and tell user space about the
-	 * sibling control.
-	 */
-	chip->trim[mic] = db;
-	chip->trim[sib] = db;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
+	scoped_guard(mutex, &chip->mutex) {
+		if (db == chip->trim[mic])
+			return 0;
+		ret = bf_trim_apply(chip, mic, db * 2);
+		if (ret < 0)
+			return ret;
+		/* One register per pair on the wire, so both channels of the
+		 * pair really did change: mirror the cache (the state restore
+		 * replays the pair from the even index) and tell user space
+		 * about the sibling control.
+		 */
+		chip->trim[mic] = db;
+		chip->trim[sib] = db;
+		ret = 1;
+	}
 	if (ret == 1 && chip->trim_kctl[sib])
 		snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
 			       &chip->trim_kctl[sib]->id);
@@ -1155,11 +1139,11 @@ static int bf_phantom_put(struct snd_kcontrol *kctl,
 	u16 old;
 	int ret = 0;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	cur = !!(chip->preamp & bit);
 	old = chip->preamp;
 	if (on == cur)
-		goto out;
+		return 0;
 	chip->preamp = on ? (chip->preamp | bit) : (chip->preamp & ~bit);
 	ret = bf_preamp_state_write(chip);
 	if (ret < 0) {
@@ -1167,12 +1151,9 @@ static int bf_phantom_put(struct snd_kcontrol *kctl,
 		 * never took.
 		 */
 		chip->preamp = old;
-		goto out;
+		return ret;
 	}
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 /* Ref Level (Instr 3/4) - see the constants' own comment in the
@@ -1210,9 +1191,9 @@ static int bf_reflevel_put(struct snd_kcontrol *kctl,
 	if (item > BF_REF_LEVEL_BOOST)
 		return -EINVAL;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if ((int)item == chip->ref_level)
-		goto out;
+		return 0;
 	old_preamp = chip->preamp;
 	old_ref_level = chip->ref_level;
 	chip->preamp = (chip->preamp & ~BF_PREAMP_REF_MASK) |
@@ -1222,12 +1203,9 @@ static int bf_reflevel_put(struct snd_kcontrol *kctl,
 	if (ret < 0) {
 		chip->preamp = old_preamp;
 		chip->ref_level = old_ref_level;
-		goto out;
+		return ret;
 	}
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 /* Gain scales.
@@ -1310,20 +1288,17 @@ static int bf_gain_put(struct snd_kcontrol *kctl,
 	if (db < 0 || db > bf_gain_max_db(mic))
 		return -EINVAL;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (db == chip->gain[mic])
-		goto out;
+		return 0;
 	raw = bf_gain_raw(mic, db);
 
 	ret = bf_vendor_write(chip, BF_REQ_GAIN, (u16)raw,
 			      BF_REG_GAIN + mic);
 	if (ret < 0)
-		goto out;
+		return ret;
 	chip->gain[mic] = db;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 /* Preamp controls: phantom power, pad, instrument ref level and the
@@ -1454,9 +1429,9 @@ static int bf_pitch_put(struct snd_kcontrol *kctl,
 		return -EINVAL;
 	p = np;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (p == chip->pitch)
-		goto out;
+		return ret;
 
 	/* The DDS quad is a ratio on top of the family rate, the same at
 	 * every sample rate; bf_pitch_write() sends it with the settings
@@ -1464,12 +1439,9 @@ static int bf_pitch_put(struct snd_kcontrol *kctl,
 	 */
 	ret = bf_pitch_write(chip, p);
 	if (ret < 0)
-		goto out;
+		return ret;
 	chip->pitch = p;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 static int bf_loopback_get(struct snd_kcontrol *kctl,
@@ -1514,26 +1486,26 @@ static int bf_loopback_put(struct snd_kcontrol *kctl,
 	int prev = -1, notify = -1;
 	int i, ret = 0;
 
-	mutex_lock(&chip->mutex);
-	if (on == chip->loopback[out])
-		goto out;
-	for (i = 0; i < 6; i++)
-		if (chip->loopback[i])
-			prev = i;
-	ret = bf_loopback_write_map(chip, out, on);
-	if (ret < 0)
-		goto out;
-	/* Single-active model (TotalMix writes one pair at 0x0001, the
-	 * rest 0x0000): toggling one output clears the others.  The
-	 * cleared one did not get its own put(), so tell user space.
-	 */
-	memset(chip->loopback, 0, sizeof(chip->loopback));
-	chip->loopback[out] = on;
-	if (on && prev >= 0 && prev != out)
-		notify = prev;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
+	scoped_guard(mutex, &chip->mutex) {
+		if (on == chip->loopback[out])
+			return 0;
+		for (i = 0; i < 6; i++)
+			if (chip->loopback[i])
+				prev = i;
+		ret = bf_loopback_write_map(chip, out, on);
+		if (ret < 0)
+			return ret;
+		/* Single-active model (TotalMix writes one pair at 0x0001,
+		 * the rest 0x0000): toggling one output clears the others.
+		 * The cleared one did not get its own put(), so tell user
+		 * space.
+		 */
+		memset(chip->loopback, 0, sizeof(chip->loopback));
+		chip->loopback[out] = on;
+		if (on && prev >= 0 && prev != out)
+			notify = prev;
+		ret = 1;
+	}
 	if (notify >= 0 && chip->loopback_kctl[notify])
 		snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
 			       &chip->loopback_kctl[notify]->id);
@@ -1557,21 +1529,18 @@ static int bf_an12_put(struct snd_kcontrol *kctl,
 	u16 v;
 	int ret = 0;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (an12 == chip->an12)
-		goto out;
+		return 0;
 	v = (chip->linked ? 0x0400 : 0x0000) | (an12 ? 0x1000 : 0x0000);
 	ret = bf_vendor_write(chip, BF_REQ_PREAMP, v, 0x1000);
 	if (ret < 0)
-		goto out;
+		return ret;
 	ret = bf_preamp_commit(chip);
 	if (ret < 0)
-		goto out;
+		return ret;
 	chip->an12 = an12;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 /* Clock source (PROTOCOL.md "Clock source / no-lock state",
@@ -1613,19 +1582,16 @@ static int bf_clock_put(struct snd_kcontrol *kctl,
 		return -EINVAL;
 	optical = item;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (optical == chip->clock_optical)
-		goto out;
+		return 0;
 	chip->clock_optical = optical;
 	ret = bf_settings_write(chip);
 	if (ret < 0) {
 		chip->clock_optical = !optical;
-		goto out;
+		return ret;
 	}
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 /* Optical Out format: bit 10 of the same BF_REG_KEEPALIVE_SETTINGS
@@ -1664,19 +1630,16 @@ static int bf_optical_put(struct snd_kcontrol *kctl,
 		return -EINVAL;
 	spdif = item;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (spdif == chip->optical_spdif)
-		goto out;
+		return 0;
 	chip->optical_spdif = spdif;
 	ret = bf_settings_write(chip);
 	if (ret < 0) {
 		chip->optical_spdif = !spdif;
-		goto out;
+		return ret;
 	}
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 static int bf_link_get(struct snd_kcontrol *kctl,
@@ -1696,21 +1659,18 @@ static int bf_link_put(struct snd_kcontrol *kctl,
 	u16 v;
 	int ret = 0;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (linked == chip->linked)
-		goto out;
+		return 0;
 	v = (linked ? 0x0400 : 0x0000) | (chip->an12 ? 0x1000 : 0x0000);
 	ret = bf_vendor_write(chip, BF_REQ_PREAMP, v, 0x1000);
 	if (ret < 0)
-		goto out;
+		return ret;
 	ret = bf_preamp_commit(chip);
 	if (ret < 0)
-		goto out;
+		return ret;
 	chip->linked = linked;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 static int bf_ms_get(struct snd_kcontrol *kctl,
@@ -1737,22 +1697,22 @@ static int bf_ms_put(struct snd_kcontrol *kctl,
 	bool on = ucontrol->value.integer.value[0];
 	int ret = 0;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (on == chip->ms_proc)
-		goto out;
+		return 0;
 	if (on) {
 		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x0035);
 		if (ret < 0)
-			goto out;
+			return ret;
 		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x004f);
 		if (ret < 0)
-			goto out;
+			return ret;
 		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x0001);
 		if (ret < 0)
-			goto out;
+			return ret;
 		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x001b);
 		if (ret < 0)
-			goto out;
+			return ret;
 	} else {
 		/* Restore each block's own AN2 crosspoint: 0x0001/0x001B
 		 * is the AN1/2 pair, 0x0035/0x004F is PH3/4.
@@ -1761,18 +1721,15 @@ static int bf_ms_put(struct snd_kcontrol *kctl,
 				      chip->xpoint[0][1][0],
 				      chip->xpoint[0][1][1]);
 		if (ret < 0)
-			goto out;
+			return ret;
 		ret = bf_xpoint_write(chip, 1, 1,
 				      chip->xpoint[1][1][0],
 				      chip->xpoint[1][1][1]);
 		if (ret < 0)
-			goto out;
+			return ret;
 	}
 	chip->ms_proc = on;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 /* DIM - cap_dim2.pcap: an absolute -20 dB on the Phones master
@@ -1846,14 +1803,12 @@ static int bf_dim_put(struct snd_kcontrol *kctl,
 	bool on = ucontrol->value.integer.value[0];
 	int ret = 0;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (on == chip->dim)
-		goto out;
+		return 0;
 	ret = bf_dim_apply(chip, on);
 	if (ret == 0)
 		ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
 	return ret;
 }
 
@@ -1928,17 +1883,14 @@ static int bf_width_put(struct snd_kcontrol *kctl,
 	if (w < -100 || w > 100)
 		return -EINVAL;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if ((int)w == chip->width)
-		goto out;
+		return 0;
 	ret = bf_width_apply(chip, (int)w);
 	if (ret < 0)
-		goto out;
+		return ret;
 	chip->width = w;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 static int bf_fx_send_info(struct snd_kcontrol *kctl,
@@ -1976,20 +1928,17 @@ static int bf_fx_send_put(struct snd_kcontrol *kctl,
 		return -EINVAL;
 	v = nv;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (v == chip->fx_send)
-		goto out;
+		return 0;
 	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, v, 0x0138);
 	if (ret < 0)
-		goto out;
+		return ret;
 	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, v, 0x0153);
 	if (ret < 0)
-		goto out;
+		return ret;
 	chip->fx_send = v;
-	ret = 1;
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 int babyface_create_flags(struct snd_usb_babyface *chip)
@@ -2324,7 +2273,7 @@ static void bf_panel_mix_wheel(struct snd_usb_babyface *chip, int delta)
 		bf_panel_sel_hint(chip);
 	}
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	db2 = clamp(chip->panel_mix_db2 + delta, BF_FADER_DB2_INF, 12);
 	chip->panel_mix_db2 = db2;
 	raw = bf_fader_db2_to_raw(db2);
@@ -2360,7 +2309,6 @@ static void bf_panel_mix_wheel(struct snd_usb_babyface *chip, int delta)
 			}
 		}
 	}
-	mutex_unlock(&chip->mutex);
 }
 
 /* A muted output ignores the wheel, as it does under TotalMix.  The
@@ -2566,10 +2514,9 @@ static void bf_panel_out_wheel(struct snd_usb_babyface *chip, int delta)
 		now = ktime_sub(now,
 				ktime_divns(ktime_sub(now, chip->panel_poll_t), 2));
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (chip->muted[out]) {
 		bf_panel_remute(chip, out);
-		mutex_unlock(&chip->mutex);
 		return;
 	}
 	fast = chip->panel_out_wheel_t &&
@@ -2599,7 +2546,6 @@ static void bf_panel_out_wheel(struct snd_usb_babyface *chip, int delta)
 	chip->panel_out_wheel_dir = dir;
 	chip->panel_out_wheel_out = out;
 	chip->panel_out_resync = true;
-	mutex_unlock(&chip->mutex);
 }
 
 /* Once the wheel has rested, write the wheel's level to the 8-bit (and
@@ -2622,15 +2568,15 @@ static void bf_panel_out_resync(struct snd_usb_babyface *chip)
 	    BF_OUT_WHEEL_RESYNC_MS)
 		return;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	chip->panel_out_resync = false;
 	out = chip->panel_out_wheel_out;
 	for (ch = 0; ch < 2; ch++) {
 		if (chip->master[out][ch] != chip->panel_master_last[out][ch])
-			goto unlock;
+			return;
 		db[ch] = chip->panel_out_hdb[out][ch];
 		if (db[ch] < BF_OUT_WHEEL_8BIT_MIN)
-			goto unlock;
+			return;
 	}
 	if (!chip->muted[out]) {
 		bool dim = out == 1 && chip->dim;
@@ -2650,8 +2596,6 @@ static void bf_panel_out_resync(struct snd_usb_babyface *chip)
 				bf_out_reg16(false, dim, chip->master[out][1]),
 				(BF_REG_MASTER_16 + 2 * out + 1) | flag);
 	}
-unlock:
-	mutex_unlock(&chip->mutex);
 }
 
 /* IN-mode wheel: the gain of the SELECT-chosen channel(s) of the
@@ -2683,7 +2627,7 @@ static void bf_panel_gain_wheel(struct snd_usb_babyface *chip, int delta)
 			mics[n++] = base + 1;
 	}
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	for (i = 0; i < n; i++) {
 		int mic = mics[i];
 		int db = clamp((int)chip->gain[mic] + delta,
@@ -2696,7 +2640,6 @@ static void bf_panel_gain_wheel(struct snd_usb_babyface *chip, int delta)
 			bf_panel_notify_kctl(chip, chip->gain_kctl[mic]);
 		}
 	}
-	mutex_unlock(&chip->mutex);
 }
 
 /* OUT-balance wheel (hold SELECT + wheel - manual sec. 5.1 "Output
@@ -2714,10 +2657,9 @@ static void bf_panel_balance_wheel(struct snd_usb_babyface *chip, int delta)
 	int out = bf_panel_out_pair(chip);
 	int db[2], ch, i, louder, bal, lim;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (chip->muted[out]) {
 		bf_panel_remute(chip, out);
-		mutex_unlock(&chip->mutex);
 		return;
 	}
 	/* Read under the lock so the L/R pair is consistent with the
@@ -2729,10 +2671,8 @@ static void bf_panel_balance_wheel(struct snd_usb_babyface *chip, int delta)
 			 chip->master[out][ch] - BF_MASTER_STEP_0DB :
 			 BF_OUT_WHEEL_MUTED;
 	louder = max(db[0], db[1]);
-	if (louder < BF_OUT_WHEEL_FLOOR) {
-		mutex_unlock(&chip->mutex);
+	if (louder < BF_OUT_WHEEL_FLOOR)
 		return;
-	}
 	/* bal > 0: the left side is the quieter one, the image is right. */
 	bal = db[1] - db[0];
 	for (i = 0; i < abs(delta); i++)
@@ -2746,7 +2686,6 @@ static void bf_panel_balance_wheel(struct snd_usb_babyface *chip, int delta)
 			 db[ch] + BF_MASTER_STEP_0DB;
 
 	bf_panel_write_master(chip, out, db[0], db[1]);
-	mutex_unlock(&chip->mutex);
 }
 
 /* SET press (byte3 0x42 flash): toggle 48V phantom on the
@@ -2774,7 +2713,7 @@ static void bf_panel_set_phantom(struct snd_usb_babyface *chip)
 	if (READ_ONCE(chip->panel_select) != 0)
 		bits |= BF_PREAMP_48V_MIC2;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	old = chip->preamp;
 	/* One channel selected: toggle it.  Both selected: ALIGN both to
 	 * the same state, so repeated SET presses cycle all-on <-> all-off
@@ -2796,7 +2735,6 @@ static void bf_panel_set_phantom(struct snd_usb_babyface *chip)
 		bf_panel_notify_kctl(chip, chip->phantom_kctl[1]);
 	for (m = 0; m < 4; m++)
 		chip->panel_mix_disp[m] = 0;
-	mutex_unlock(&chip->mutex);
 }
 
 static void bf_panel_notify(struct snd_usb_babyface *chip, int ctl)
@@ -2945,9 +2883,8 @@ static void bf_panel_tick(struct snd_usb_babyface *chip)
 				snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
 					       &kctl->id);
 			if (READ_ONCE(chip->panel_mix)) {
-				mutex_lock(&chip->mutex);
-				bf_panel_mix_seed(chip);
-				mutex_unlock(&chip->mutex);
+				scoped_guard(mutex, &chip->mutex)
+					bf_panel_mix_seed(chip);
 			}
 		}
 	}
@@ -3219,7 +3156,6 @@ static int bf_panel_select_put(struct snd_kcontrol *kctl,
 	 */
 	bool restore = time_is_after_jiffies(chip->panel_start + 3 * HZ);
 	s8 sel = v < 4 ? v : -1;
-	int ret = 1;
 
 	if (v > 4)
 		return -EINVAL;
@@ -3231,25 +3167,21 @@ static int bf_panel_select_put(struct snd_kcontrol *kctl,
 	if (restore && chip->reprobe)
 		return 0;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (pair == READ_ONCE(chip->panel_in) - 1 && !restore && sel >= 0)
 		/* Set while the LEDs show the selection: the next press steps
 		 * it.
 		 */
 		chip->panel_select_armed = true;
-	if (sel == chip->panel_sel[pair]) {
-		ret = 0;
-		goto out;
-	}
+	if (sel == chip->panel_sel[pair])
+		return 0;
 	chip->panel_sel[pair] = sel;
 	if (pair == READ_ONCE(chip->panel_in) - 1) {
 		bf_panel_sel_load(chip);
 		if (READ_ONCE(chip->panel_mix))
 			bf_panel_mix_seed(chip);
 	}
-out:
-	mutex_unlock(&chip->mutex);
-	return ret;
+	return 1;
 }
 
 /* Shared boolean get - private_value selects mix (0) / dim (1). */
@@ -3937,24 +3869,22 @@ static int bf_eq_put(struct snd_kcontrol *kctl,
 	if (param == 14)	/* slope enum items are 6/12/18/24 */
 		nv = nv == 0 ? 6 : nv == 1 ? 12 : nv == 2 ? 18 : 24;
 
-	mutex_lock(&chip->mutex);
+	guard(mutex)(&chip->mutex);
 	if (param == 0) {
 		if (e->on != !!nv) {
 			e->on = !!nv;
 			ret = bf_eq_update_strip(chip, strip);
 			if (ret < 0)
-				goto out;
+				return ret;
 			ret = 1;
 		}
 	} else if (v && *v != nv) {
 		*v = nv;
 		ret = bf_eq_update_strip(chip, strip);
 		if (ret < 0)
-			goto out;
+			return ret;
 		ret = 1;
 	}
-out:
-	mutex_unlock(&chip->mutex);
 	return ret;
 }
 

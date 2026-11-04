@@ -1,4 +1,4 @@
-From 77c0e42abb92b303283cdc3e677fa61027d74aac Mon Sep 17 00:00:00 2001
+From 3ac78bcc62a382c9f12ba6ca4ba2970e72de70ca Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:21 +0100
 Subject: [PATCH v8 5/8] ALSA: usb: babyfacepro: add S3 suspend/resume
@@ -21,12 +21,12 @@ Co-developed-by: David Fredman <davfre@gmail.com>
 Signed-off-by: David Fredman <davfre@gmail.com>
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---
- sound/usb/babyfacepro/babyfacepro.c | 90 ++++++++++++++++++++++++++---
+ sound/usb/babyfacepro/babyfacepro.c | 89 ++++++++++++++++++++++++++---
  sound/usb/babyfacepro/babyfacepro.h |  4 +-
- 2 files changed, 83 insertions(+), 11 deletions(-)
+ 2 files changed, 82 insertions(+), 11 deletions(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index 4d9f9d74f..e320ad2b4 100644
+index 12cfd7fea..06ef1a97d 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
 @@ -3,7 +3,8 @@
@@ -72,7 +72,7 @@ index 4d9f9d74f..e320ad2b4 100644
   */
  int babyface_restore_state(struct snd_usb_babyface *chip)
  {
-@@ -811,8 +821,9 @@ static int babyface_stream_start(struct snd_usb_babyface *chip)
+@@ -797,8 +807,9 @@ static int babyface_stream_start(struct snd_usb_babyface *chip)
  	/* A session start is what the RME Windows driver sends
  	 * (cap_audio): the trigger pair, the URBs, the arm.  The device
  	 * keeps its mixer state between sessions, so nothing is cleared
@@ -84,7 +84,7 @@ index 4d9f9d74f..e320ad2b4 100644
  	 */
  	ret = bf_clock_write(chip);
  	if (ret < 0)
-@@ -1529,7 +1540,8 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1497,7 +1508,8 @@ static int babyface_probe(struct usb_interface *intf,
  	chip->card = card;
  
  	chip->dev = usb_get_dev(dev);
@@ -94,7 +94,7 @@ index 4d9f9d74f..e320ad2b4 100644
  	 * reference while streaming, so an autosuspend request could race
  	 * a live stream.  Disable it explicitly rather than ship an
  	 * untested code path - full autosuspend support (correct
-@@ -1785,6 +1797,63 @@ static void babyface_disconnect(struct usb_interface *intf)
+@@ -1752,6 +1764,62 @@ static void babyface_disconnect(struct usb_interface *intf)
  	snd_card_free_when_closed(chip->card);
  }
  
@@ -111,10 +111,10 @@ index 4d9f9d74f..e320ad2b4 100644
 +			snd_pcm_suspend_all(sdev->device_data);
 +	}
 +	/* The URB handlers queue the work: kill them first. */
-+	mutex_lock(&chip->mutex);
-+	if (chip->streaming)
-+		babyface_stream_kill(chip);
-+	mutex_unlock(&chip->mutex);
++	scoped_guard(mutex, &chip->mutex) {
++		if (chip->streaming)
++			babyface_stream_kill(chip);
++	}
 +	cancel_work_sync(&chip->stream_work);
 +	return 0;
 +}
@@ -139,26 +139,25 @@ index 4d9f9d74f..e320ad2b4 100644
 +	 * fail, and udev's alsactl restore then loads the mixer state
 +	 * stored at the last shutdown over the current one.
 +	 */
-+	mutex_lock(&chip->mutex);
++	guard(mutex)(&chip->mutex);
 +	err = usb_set_interface(chip->dev, BF_IFACE, chip->alt);
 +	if (err < 0)
-+		goto out;
++		return err;
 +	err = bf_cold_init(chip);
 +	if (err < 0)
-+		goto out;
++		return err;
 +	err = babyface_restore_state(chip);
 +	if (err < 0)
-+		goto out;
++		return err;
 +	err = bf_state_apply_flags(chip);
-+out:
-+	mutex_unlock(&chip->mutex);
++
 +	return err;
 +}
 +
  static const struct usb_device_id babyface_ids[] = {
  	{ USB_DEVICE(USB_VENDOR_RME, USB_PRODUCT_BABYFACE_PRO_FS) },
  	{ }
-@@ -1795,6 +1864,9 @@ static struct usb_driver babyface_driver = {
+@@ -1762,6 +1830,9 @@ static struct usb_driver babyface_driver = {
  	.name = "snd-usb-babyface-pro",
  	.probe = babyface_probe,
  	.disconnect = babyface_disconnect,

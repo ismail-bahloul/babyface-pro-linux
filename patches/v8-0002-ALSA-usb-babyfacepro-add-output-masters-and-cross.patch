@@ -1,4 +1,4 @@
-From be5813cd9e00f4bf0c2113eb84a10f77aae5f1da Mon Sep 17 00:00:00 2001
+From a90a39167d49b14941ca8d3ea63a4d3a98e448f5 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:19 +0100
 Subject: [PATCH v8 2/8] ALSA: usb: babyfacepro: add output masters and
@@ -35,10 +35,10 @@ Signed-off-by: David Fredman <davfre@gmail.com>
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---
  sound/usb/babyfacepro/Makefile          |   2 +-
- sound/usb/babyfacepro/babyfacepro-ctl.c | 665 ++++++++++++++++++++++++
+ sound/usb/babyfacepro/babyfacepro-ctl.c | 656 ++++++++++++++++++++++++
  sound/usb/babyfacepro/babyfacepro.c     |  60 ++-
  sound/usb/babyfacepro/babyfacepro.h     | 124 ++++-
- 4 files changed, 848 insertions(+), 3 deletions(-)
+ 4 files changed, 839 insertions(+), 3 deletions(-)
  create mode 100644 sound/usb/babyfacepro/babyfacepro-ctl.c
 
 diff --git a/sound/usb/babyfacepro/Makefile b/sound/usb/babyfacepro/Makefile
@@ -53,10 +53,10 @@ index 5adc6d474..a50647a06 100644
  obj-$(CONFIG_SND_USB_BABYFACE_PRO) += snd-usb-babyface-pro.o
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
 new file mode 100644
-index 000000000..4e9222ddd
+index 000000000..942d4732c
 --- /dev/null
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
-@@ -0,0 +1,665 @@
+@@ -0,0 +1,656 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * RME Babyface Pro / Pro FS - proprietary-mode USB audio driver
@@ -405,9 +405,9 @@ index 000000000..4e9222ddd
 +	l = nl;
 +	r = nr;
 +
-+	mutex_lock(&chip->mutex);
++	guard(mutex)(&chip->mutex);
 +	if (l == chip->master[out][0] && r == chip->master[out][1])
-+		goto out;
++		return 0;
 +
 +	wire_l = chip->muted[out] ? 0 : l;
 +	wire_r = chip->muted[out] ? 0 : r;
@@ -420,26 +420,23 @@ index 000000000..4e9222ddd
 +	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wire_l),
 +			      BF_REG_MASTER_8 + 2 * out);
 +	if (ret < 0)
-+		goto out;
++		return ret;
 +	ret = bf_vendor_write(chip, BF_REQ_GAIN, bf_master_reg8(wire_r),
 +			      BF_REG_MASTER_8 + 2 * out + 1);
 +	if (ret < 0)
-+		goto out;
++		return ret;
 +	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wire_l),
 +			      (BF_REG_MASTER_16 + 2 * out) | flag);
 +	if (ret < 0)
-+		goto out;
++		return ret;
 +	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_master_reg16(wire_r),
 +			      (BF_REG_MASTER_16 + 2 * out + 1) | flag);
 +	if (ret < 0)
-+		goto out;
++		return ret;
 +
 +	chip->master[out][0] = l;
 +	chip->master[out][1] = r;
-+	ret = 1;
-+out:
-+	mutex_unlock(&chip->mutex);
-+	return ret;
++	return 1;
 +}
 +
 +static int bf_mute_info(struct snd_kcontrol *kctl,
@@ -476,9 +473,9 @@ index 000000000..4e9222ddd
 +	u16 flag;
 +	int ret = 0;
 +
-+	mutex_lock(&chip->mutex);
++	guard(mutex)(&chip->mutex);
 +	if (muted == chip->muted[out])
-+		goto out;
++		return 0;
 +
 +	flag = bf_flag_cycle[chip->flag_cnt];
 +	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
@@ -487,19 +484,19 @@ index 000000000..4e9222ddd
 +		ret = bf_vendor_write(chip, BF_REQ_GAIN, BF_MASTER_MUTE,
 +				      BF_REG_MASTER_8 + 2 * out);
 +		if (ret < 0)
-+			goto out;
++			return ret;
 +		ret = bf_vendor_write(chip, BF_REQ_GAIN, BF_MASTER_MUTE,
 +				      BF_REG_MASTER_8 + 2 * out + 1);
 +		if (ret < 0)
-+			goto out;
++			return ret;
 +		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000,
 +				      (BF_REG_MASTER_16 + 2 * out) | flag);
 +		if (ret < 0)
-+			goto out;
++			return ret;
 +		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000,
 +				      (BF_REG_MASTER_16 + 2 * out + 1) | flag);
 +		if (ret < 0)
-+			goto out;
++			return ret;
 +	} else {
 +		/* Unmute restores the cached volume (TotalMix keeps the
 +		 * pre-mute fader value host-side), 8-bit + 16-bit.
@@ -508,28 +505,25 @@ index 000000000..4e9222ddd
 +				      bf_master_reg8(chip->master[out][0]),
 +				      BF_REG_MASTER_8 + 2 * out);
 +		if (ret < 0)
-+			goto out;
++			return ret;
 +		ret = bf_vendor_write(chip, BF_REQ_GAIN,
 +				      bf_master_reg8(chip->master[out][1]),
 +				      BF_REG_MASTER_8 + 2 * out + 1);
 +		if (ret < 0)
-+			goto out;
++			return ret;
 +		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
 +				      bf_master_reg16(chip->master[out][0]),
 +				      (BF_REG_MASTER_16 + 2 * out) | flag);
 +		if (ret < 0)
-+			goto out;
++			return ret;
 +		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
 +				      bf_master_reg16(chip->master[out][1]),
 +				      (BF_REG_MASTER_16 + 2 * out + 1) | flag);
 +		if (ret < 0)
-+			goto out;
++			return ret;
 +	}
 +	chip->muted[out] = muted;
-+	ret = 1;
-+out:
-+	mutex_unlock(&chip->mutex);
-+	return ret;
++	return 1;
 +}
 +
 +/* The crosspoint fader is linear in amplitude: BF_FADER_0DB (0x16a0) is
@@ -619,20 +613,17 @@ index 000000000..4e9222ddd
 +	l = nl;
 +	r = nr;
 +
-+	mutex_lock(&chip->mutex);
++	guard(mutex)(&chip->mutex);
 +	if (l == chip->xpoint[out][src][0] && r == chip->xpoint[out][src][1])
-+		goto out;
++		return 0;
 +
 +	ret = bf_xpoint_write(chip, out, src, l, r);
 +	if (ret < 0)
-+		goto out;
++		return ret;
 +
 +	chip->xpoint[out][src][0] = l;
 +	chip->xpoint[out][src][1] = r;
-+	ret = 1;
-+out:
-+	mutex_unlock(&chip->mutex);
-+	return ret;
++	return 1;
 +}
 +
 +int babyface_create_xpoints(struct snd_usb_babyface *chip)
@@ -723,7 +714,7 @@ index 000000000..4e9222ddd
 +	return 0;
 +}
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index 0b43c3f98..d32e42120 100644
+index ac1414adc..0bf94ff5d 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
 @@ -5,7 +5,8 @@
@@ -779,7 +770,7 @@ index 0b43c3f98..d32e42120 100644
  static bool babyface_capture_copy(struct snd_usb_babyface *chip,
  				  struct snd_pcm_substream *subs,
  				  const u8 *data, unsigned int frames)
-@@ -1409,6 +1446,15 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1377,6 +1414,15 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -795,7 +786,7 @@ index 0b43c3f98..d32e42120 100644
  	/* Keep the allocation size independent of the active USB mode. */
  	urbsize = BF_WORDS_PER_FRAME * sizeof(u32) * chip->frames_per_urb;
  	chip->urbs_in = kcalloc(chip->nurbs, sizeof(*chip->urbs_in), GFP_KERNEL);
-@@ -1457,6 +1503,18 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1425,6 +1471,18 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  

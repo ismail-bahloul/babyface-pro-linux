@@ -1,4 +1,4 @@
-From 306714b2e18a44d3b727fb238f37a0fd38073ca0 Mon Sep 17 00:00:00 2001
+From 470fc3d96cce921901fa23ee4a42b1d60352bf59 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Isma=C3=AFl=20Bahloul?= <i.bahloul01@gmail.com>
 Date: Tue, 27 Oct 2026 11:13:19 +0100
 Subject: [PATCH v8 3/8] ALSA: usb: babyfacepro: add mic preamp, phantom/pad
@@ -23,16 +23,16 @@ Co-developed-by: David Fredman <davfre@gmail.com>
 Signed-off-by: David Fredman <davfre@gmail.com>
 Signed-off-by: Ismaïl Bahloul <i.bahloul01@gmail.com>
 ---
- sound/usb/babyfacepro/babyfacepro-ctl.c | 640 ++++++++++++++++++++++++
- sound/usb/babyfacepro/babyfacepro.c     | 111 +++-
+ sound/usb/babyfacepro/babyfacepro-ctl.c | 624 ++++++++++++++++++++++++
+ sound/usb/babyfacepro/babyfacepro.c     | 111 ++++-
  sound/usb/babyfacepro/babyfacepro.h     |  79 +++
- 3 files changed, 829 insertions(+), 1 deletion(-)
+ 3 files changed, 813 insertions(+), 1 deletion(-)
 
 diff --git a/sound/usb/babyfacepro/babyfacepro-ctl.c b/sound/usb/babyfacepro/babyfacepro-ctl.c
-index 4e9222ddd..d7d3dbf93 100644
+index 942d4732c..fe6266ea1 100644
 --- a/sound/usb/babyfacepro/babyfacepro-ctl.c
 +++ b/sound/usb/babyfacepro/babyfacepro-ctl.c
-@@ -663,3 +663,643 @@ int babyface_create_masters(struct snd_usb_babyface *chip)
+@@ -654,3 +654,627 @@ int babyface_create_masters(struct snd_usb_babyface *chip)
  
  	return 0;
  }
@@ -134,17 +134,14 @@ index 4e9222ddd..d7d3dbf93 100644
 +	bool invert = ucontrol->value.integer.value[0];
 +	int ret = 0;
 +
-+	mutex_lock(&chip->mutex);
++	guard(mutex)(&chip->mutex);
 +	if (invert == chip->phase[mic])
-+		goto out;
++		return 0;
 +	ret = bf_phase_apply(chip, mic, invert);
 +	if (ret < 0)
-+		goto out;
++		return ret;
 +	chip->phase[mic] = invert;
-+	ret = 1;
-+out:
-+	mutex_unlock(&chip->mutex);
-+	return ret;
++	return 1;
 +}
 +
 +/* Stereo split (PROTOCOL.md "Stereo split", cap_ctrl3.pcap, hardware-
@@ -197,17 +194,14 @@ index 4e9222ddd..d7d3dbf93 100644
 +	bool split = ucontrol->value.integer.value[0];
 +	int ret = 0;
 +
-+	mutex_lock(&chip->mutex);
++	guard(mutex)(&chip->mutex);
 +	if (split == chip->split[pb])
-+		goto out;
++		return 0;
 +	ret = bf_split_apply(chip, pb, split);
 +	if (ret < 0)
-+		goto out;
++		return ret;
 +	chip->split[pb] = split;
-+	ret = 1;
-+out:
-+	mutex_unlock(&chip->mutex);
-+	return ret;
++	return 1;
 +}
 +
 +/* Input Trim (T button, AN1-4): PROTOCOL.md "Trim (T) write for the
@@ -296,22 +290,21 @@ index 4e9222ddd..d7d3dbf93 100644
 +	if (db < -65 || db > 6)
 +		return -EINVAL;
 +
-+	mutex_lock(&chip->mutex);
-+	if (db == chip->trim[mic])
-+		goto out;
-+	ret = bf_trim_apply(chip, mic, db * 2);
-+	if (ret < 0)
-+		goto out;
-+	/* One register per pair on the wire, so both channels of the pair
-+	 * really did change: mirror the cache (the state restore replays
-+	 * the pair from the even index) and tell user space about the
-+	 * sibling control.
-+	 */
-+	chip->trim[mic] = db;
-+	chip->trim[sib] = db;
-+	ret = 1;
-+out:
-+	mutex_unlock(&chip->mutex);
++	scoped_guard(mutex, &chip->mutex) {
++		if (db == chip->trim[mic])
++			return 0;
++		ret = bf_trim_apply(chip, mic, db * 2);
++		if (ret < 0)
++			return ret;
++		/* One register per pair on the wire, so both channels of the
++		 * pair really did change: mirror the cache (the state restore
++		 * replays the pair from the even index) and tell user space
++		 * about the sibling control.
++		 */
++		chip->trim[mic] = db;
++		chip->trim[sib] = db;
++		ret = 1;
++	}
 +	if (ret == 1 && chip->trim_kctl[sib])
 +		snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
 +			       &chip->trim_kctl[sib]->id);
@@ -421,11 +414,11 @@ index 4e9222ddd..d7d3dbf93 100644
 +	u16 old;
 +	int ret = 0;
 +
-+	mutex_lock(&chip->mutex);
++	guard(mutex)(&chip->mutex);
 +	cur = !!(chip->preamp & bit);
 +	old = chip->preamp;
 +	if (on == cur)
-+		goto out;
++		return 0;
 +	chip->preamp = on ? (chip->preamp | bit) : (chip->preamp & ~bit);
 +	ret = bf_preamp_state_write(chip);
 +	if (ret < 0) {
@@ -433,12 +426,9 @@ index 4e9222ddd..d7d3dbf93 100644
 +		 * never took.
 +		 */
 +		chip->preamp = old;
-+		goto out;
++		return ret;
 +	}
-+	ret = 1;
-+out:
-+	mutex_unlock(&chip->mutex);
-+	return ret;
++	return 1;
 +}
 +
 +/* Ref Level (Instr 3/4) - see the constants' own comment in the
@@ -476,9 +466,9 @@ index 4e9222ddd..d7d3dbf93 100644
 +	if (item > BF_REF_LEVEL_BOOST)
 +		return -EINVAL;
 +
-+	mutex_lock(&chip->mutex);
++	guard(mutex)(&chip->mutex);
 +	if ((int)item == chip->ref_level)
-+		goto out;
++		return 0;
 +	old_preamp = chip->preamp;
 +	old_ref_level = chip->ref_level;
 +	chip->preamp = (chip->preamp & ~BF_PREAMP_REF_MASK) |
@@ -488,12 +478,9 @@ index 4e9222ddd..d7d3dbf93 100644
 +	if (ret < 0) {
 +		chip->preamp = old_preamp;
 +		chip->ref_level = old_ref_level;
-+		goto out;
++		return ret;
 +	}
-+	ret = 1;
-+out:
-+	mutex_unlock(&chip->mutex);
-+	return ret;
++	return 1;
 +}
 +
 +/* Gain scales.
@@ -576,20 +563,17 @@ index 4e9222ddd..d7d3dbf93 100644
 +	if (db < 0 || db > bf_gain_max_db(mic))
 +		return -EINVAL;
 +
-+	mutex_lock(&chip->mutex);
++	guard(mutex)(&chip->mutex);
 +	if (db == chip->gain[mic])
-+		goto out;
++		return 0;
 +	raw = bf_gain_raw(mic, db);
 +
 +	ret = bf_vendor_write(chip, BF_REQ_GAIN, (u16)raw,
 +			      BF_REG_GAIN + mic);
 +	if (ret < 0)
-+		goto out;
++		return ret;
 +	chip->gain[mic] = db;
-+	ret = 1;
-+out:
-+	mutex_unlock(&chip->mutex);
-+	return ret;
++	return 1;
 +}
 +
 +/* Preamp controls: phantom power, pad, instrument ref level and the
@@ -677,7 +661,7 @@ index 4e9222ddd..d7d3dbf93 100644
 +	return 0;
 +}
 diff --git a/sound/usb/babyfacepro/babyfacepro.c b/sound/usb/babyfacepro/babyfacepro.c
-index d32e42120..af0171a3b 100644
+index 0bf94ff5d..019a46fc9 100644
 --- a/sound/usb/babyfacepro/babyfacepro.c
 +++ b/sound/usb/babyfacepro/babyfacepro.c
 @@ -255,7 +255,21 @@ int bf_cold_init(struct snd_usb_babyface *chip)
@@ -772,7 +756,7 @@ index d32e42120..af0171a3b 100644
  static bool babyface_capture_copy(struct snd_usb_babyface *chip,
  				  struct snd_pcm_substream *subs,
  				  const u8 *data, unsigned int frames)
-@@ -1352,6 +1428,7 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1320,6 +1396,7 @@ static int babyface_probe(struct usb_interface *intf,
  	struct snd_card *card;
  	struct snd_pcm *pcm;
  	unsigned int urbsize;
@@ -780,7 +764,7 @@ index d32e42120..af0171a3b 100644
  	int i, err;
  
  	if (intf->cur_altsetting->desc.bInterfaceNumber != BF_IFACE) {
-@@ -1391,6 +1468,7 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1359,6 +1436,7 @@ static int babyface_probe(struct usb_interface *intf,
  	chip->rate = 48000;
  	chip->alt = BF_ALT_1;
  	chip->frame_bytes = 56;
@@ -788,7 +772,7 @@ index d32e42120..af0171a3b 100644
  	mutex_init(&chip->mutex);
  	spin_lock_init(&chip->lock);
  	atomic_set(&chip->urb_err, 0);
-@@ -1446,6 +1524,25 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1414,6 +1492,25 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
@@ -814,7 +798,7 @@ index d32e42120..af0171a3b 100644
  	/* The 0x16 clear zeroed the mixer registers: apply the factory
  	 * default routing to keep the outputs live out of the box.  alsactl
  	 * restores the user's settings once the card is registered.
-@@ -1515,6 +1612,18 @@ static int babyface_probe(struct usb_interface *intf,
+@@ -1483,6 +1580,18 @@ static int babyface_probe(struct usb_interface *intf,
  		goto error;
  	}
  
