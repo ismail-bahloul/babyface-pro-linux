@@ -12,6 +12,9 @@
 # carries no converter delay.  For the full analog path, cable PH3/4 into IN3
 # and run with DETECT=2.
 #
+# It needs the proprietary mode: the reported delay comes from this driver, so
+# a card in Class Compliant mode has nothing to compare against.
+#
 # Before you run it:
 #   - no stream may be open on the card.  A sound server that is not playing
 #     to it is fine (check: cat /proc/asound/cardN/pcm0p/sub0/status says
