@@ -10,16 +10,11 @@ paste, not a re-investigation.
 > `s:"RME Babyface Pro driver"`.  This recipe stays for v8 or for
 > replying on the list.
 >
-> Status 2026-10-31: v8 is cut as `patches/v8-*.patch` and lives on
-> `fix/sashiko-v8`, but it has **not been sent**.  The command below
-> targets v8; run it only after the driver PR is merged.
->
-> Status 2026-11-04: Takashi replied to v7 on 2026-11-02 (guard()
-> macros, memcpy() in the PCM copies, an unbounded list in
-> `bf_seen_before()`, and a second look at Sashiko).  v8 was cut again
-> with those four answered, as branch `v8e` in `linux-next-src`; the
-> cover letter says so.  Still **not sent**, and still numbered v8 so
-> that the reply to his review is the version he reads next.
+> Status 2026-11-05: v8 was sent as `[PATCH v8 0/8]`, answering Takashi's
+> review of v7 (guard() locking, memcpy() in the PCM copies, a bounded
+> `bf_seen_before()`, a second look at Sashiko).  It is numbered v8 on
+> purpose, so the cover letter reads as the reply to his review.  The
+> recipe below stays for v9 or for replying on the list.
 
 ## Prerequisites (CachyOS/Arch)
 
