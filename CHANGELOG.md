@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.3 (2026-11-05)
+
+### Fixed
+- Every probe and resume wrote to the AN1 and AN2 crosspoints, even at width
+  0, which opened those inputs after the default mixer had left them muted.
+  The cache still said 0, so a later write of 0 could not mute them again.
+- Joining a split playback pair came back 6 dB low and lost the level set on
+  its AN1/2 crosspoint. It now restores that level (#31).
+- DIM, mute, the masters and the front-panel wheels no longer cancel each
+  other on the Phones level, and the panel's master writes respect DIM.
+- The front panel's MIX wheel lost clicks below the curve's first point; a
+  muted input now comes up on the first click.
+- Boost fell back to -10 dBV after AN 1>2, an input link or a state replay.
+- An EQ band of type Off is now identity rather than a high shelf, and a
+  failed strip upload is reported.
+- A failed URB or DMA allocation during probe returned success after freeing
+  the card. It now returns -ENOMEM.
+- A substream prepared before the other direction changed the session can no
+  longer start against stale rate and period settings.
+
+### Added
+- `tools/kernel/reload.sh` reloads the module and, when it cannot, names the
+  processes holding the card. `-a` stops PipeWire and WirePlumber around it.
+
+### Changed
+- The driver uses `guard()` and `scoped_guard()` for all its locking, and
+  `bf_seen_before()` keeps a fixed table of recent units. Neither changes
+  behaviour.
+- The series under `patches/` is v8, which answers the review of v7.
+
 ## 0.2.2 (2026-10-27)
 
 ### Fixed
