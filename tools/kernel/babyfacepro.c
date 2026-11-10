@@ -20,6 +20,7 @@
 #include <linux/usb.h>
 #include <linux/workqueue.h>
 #include <sound/core.h>
+#include <sound/info.h>
 #include <sound/initval.h>
 #include <sound/pcm.h>
 
@@ -576,6 +577,62 @@ static bool babyface_playback_copy(struct snd_usb_babyface *chip,
 	return crossed;
 }
 
+/* How long the queue of one direction lasts once a URB has completed:
+ * the URBs still in flight behind it.
+ */
+static s64 bf_queue_slack_ns(struct snd_usb_babyface *chip,
+			     unsigned int inflight)
+{
+	if (inflight < 2)
+		return 0;
+	return mul_u64_u32_div((u64)(inflight - 1) * chip->urb_frames,
+			       NSEC_PER_SEC, chip->rate);
+}
+
+/* Time a completion against the device clock.  The device consumes and
+ * produces URBs at a steady rate, so in a session without trouble
+ * completion n comes at t0 + n URBs' worth of frames, give or take the
+ * interrupt latency.  The offset from that timeline is the lateness of
+ * this handler; the smallest offset seen is an on-time completion, and
+ * it creeps up slowly to follow the drift between the device clock and
+ * ktime.
+ *
+ * A handler later than the URBs still in flight behind its own leaves
+ * the endpoint with nothing queued: for OUT the device is starved, and
+ * it holds the whole stream until the URB is back (see the stream notes
+ * in babyfacepro.h).  Count it as the queue running dry, and move the
+ * timeline on by the stall it caused.  Caller holds chip->lock.
+ */
+static void bf_qstat_update(struct snd_usb_babyface *chip, int dir,
+			    ktime_t now, unsigned int frames,
+			    unsigned int inflight)
+{
+	struct bf_qstat *q = &chip->qstat[dir];
+	s64 off, late, slack;
+
+	if (!q->started) {
+		q->started = true;
+		q->t0 = now;
+		return;
+	}
+	q->frames += frames;
+	off = ktime_to_ns(ktime_sub(now, q->t0)) -
+	      (s64)mul_u64_u32_div(q->frames, NSEC_PER_SEC, chip->rate);
+	late = off - q->base_ns;
+	if (late < 0) {
+		q->base_ns = off;
+		return;
+	}
+	q->late_max_ns = max(q->late_max_ns, late);
+	slack = bf_queue_slack_ns(chip, inflight);
+	if (late > slack) {
+		q->dry++;
+		q->base_ns += late - slack;
+	} else {
+		q->base_ns += late >> 10;
+	}
+}
+
 /* Count a bad URB.  Once BF_URB_ERR_STOP of them are in a row, queue
  * stream_work to stop the session and return true: the URB must not be
  * resubmitted.  Some host controllers fail a URB on a broken endpoint
@@ -675,8 +732,12 @@ static void babyface_complete_in(struct urb *urb)
 		goto resubmit;
 	}
 	babyface_urb_ok(chip);
-	scoped_guard(spinlock_irqsave, &chip->lock)
+	scoped_guard(spinlock_irqsave, &chip->lock) {
 		chip->in_done = ktime_get();
+		bf_qstat_update(chip, SNDRV_PCM_STREAM_CAPTURE, chip->in_done,
+				urb->actual_length / chip->frame_bytes,
+				chip->nurbs);
+	}
 
 	/* The session outlives a substream that is closed while the other
 	 * direction still runs: close() waits out this RCU section.
@@ -721,6 +782,10 @@ static void babyface_complete_out(struct urb *urb)
 		goto resubmit;
 	}
 	babyface_urb_ok(chip);
+	scoped_guard(spinlock_irqsave, &chip->lock)
+		bf_qstat_update(chip, SNDRV_PCM_STREAM_PLAYBACK, ktime_get(),
+				urb->transfer_buffer_length / chip->frame_bytes,
+				chip->out_inflight);
 
 	scoped_guard(rcu) {
 		subs = rcu_dereference(chip->subs[SNDRV_PCM_STREAM_PLAYBACK]);
@@ -849,32 +914,33 @@ static int babyface_stream_start(struct snd_usb_babyface *chip)
 	if (ret < 0)
 		goto err;
 
-	for (i = 0; i < chip->urbs_active; i++) {
-		/* Do not replay data from the previous stream/format. */
-		memset(chip->buf_out[i], 0, urbsize);
+	/* The buffers come from usb_alloc_coherent(), so they are already
+	 * DMA-mapped: hand the HCD the mapping instead of letting it map
+	 * them again.  Without this, usb_hcd_map_urb_for_dma() calls
+	 * dma_map_single() on a coherent allocation, which fails with
+	 * -EAGAIN on any host where that allocation is a vmap (IOMMU-backed
+	 * dma-iommu, e.g. amd_iommu in its default translated mode).
+	 *
+	 * The IN queue is always nurbs deep; the OUT queue is the
+	 * session's urbs_active (see hw_params).
+	 */
+	for (i = 0; i < chip->nurbs; i++) {
 		usb_fill_int_urb(chip->urbs_in[i], chip->dev,
 				 usb_rcvintpipe(chip->dev, BF_EP_IN),
 				 chip->buf_in[i], urbsize,
 				 babyface_complete_in, chip, 1);
+		chip->urbs_in[i]->transfer_dma = chip->dma_in[i];
+		chip->urbs_in[i]->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
+	}
+	for (i = 0; i < chip->urbs_active; i++) {
+		/* Do not replay data from the previous stream/format. */
+		memset(chip->buf_out[i], 0, urbsize);
 		usb_fill_int_urb(chip->urbs_out[i], chip->dev,
 				 usb_sndintpipe(chip->dev, BF_EP_OUT),
 				 chip->buf_out[i], urbsize,
 				 babyface_complete_out, chip, 1);
-		/* The buffers come from usb_alloc_coherent(), so
-		 * they are already DMA-mapped: hand the HCD the
-		 * mapping instead of letting it map them again.
-		 * Without this, usb_hcd_map_urb_for_dma() calls
-		 * dma_map_single() on a coherent allocation, which
-		 * fails with -EAGAIN on any host where that
-		 * allocation is a vmap (IOMMU-backed dma-iommu,
-		 * e.g. amd_iommu in its default translated mode).
-		 */
-		chip->urbs_in[i]->transfer_dma = chip->dma_in[i];
-		chip->urbs_in[i]->transfer_flags |=
-			URB_NO_TRANSFER_DMA_MAP;
 		chip->urbs_out[i]->transfer_dma = chip->dma_out[i];
-		chip->urbs_out[i]->transfer_flags |=
-			URB_NO_TRANSFER_DMA_MAP;
+		chip->urbs_out[i]->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
 	}
 	/* A count left over from the previous session would stop this one
 	 * as soon as a URB errors, or through a stream_work still queued.
@@ -888,23 +954,32 @@ static int babyface_stream_start(struct snd_usb_babyface *chip)
 	scoped_guard(spinlock_irq, &chip->lock) {
 		chip->out_inflight = chip->urbs_active;
 		chip->in_done = ktime_get();
+		memset(chip->qstat, 0, sizeof(chip->qstat));
 	}
 	WRITE_ONCE(chip->streaming, true);
-	for (i = 0; i < chip->urbs_active; i++) {
-		ret = usb_submit_urb(chip->urbs_in[i], GFP_KERNEL);
-		if (ret < 0)
-			goto err;
-		ret = usb_submit_urb(chip->urbs_out[i], GFP_KERNEL);
-		if (ret < 0)
-			goto err;
+	/* In pairs while both queues have one: the device advances the
+	 * stream only while both endpoints have a URB pending.
+	 */
+	for (i = 0; i < max(chip->nurbs, chip->urbs_active); i++) {
+		if (i < chip->nurbs) {
+			ret = usb_submit_urb(chip->urbs_in[i], GFP_KERNEL);
+			if (ret < 0)
+				goto err;
+		}
+		if (i < chip->urbs_active) {
+			ret = usb_submit_urb(chip->urbs_out[i], GFP_KERNEL);
+			if (ret < 0)
+				goto err;
+		}
 	}
 	/* Session arm (cap_audio frame 5829, after the URBs). */
 	ret = bf_vendor_write(chip, BF_REQ_SESSION_ARM, 0x0000, 0xc000);
 	if (ret < 0)
 		goto err;
 
-	dev_dbg(&chip->dev->dev, "stream started (%u frames/URB, %u URBs)\n",
-		chip->urb_frames, chip->urbs_active);
+	dev_dbg(&chip->dev->dev,
+		"stream started (%u frames/URB, %u IN and %u OUT URBs)\n",
+		chip->urb_frames, chip->nurbs, chip->urbs_active);
 	return 0;
 
 err:
@@ -959,12 +1034,13 @@ static const struct snd_pcm_hardware babyface_pcm_hw = {
 };
 
 /* The period of the direction that set the session up, in whole URBs:
- * half the URBs in flight, rounded up.  The other direction's period may
+ * half the OUT URBs that two periods take, rounded up (hw_params sets
+ * it; out_urbs does not change it).  The other direction's period may
  * not be shorter.  Caller holds chip->mutex.
  */
 static unsigned int bf_session_period(struct snd_usb_babyface *chip)
 {
-	return chip->urb_frames * DIV_ROUND_UP(chip->urbs_active, 2);
+	return chip->session_period;
 }
 
 static int urb_split;
@@ -1259,10 +1335,19 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 		 * whole URBs, see bf_session_period()), so neither direction
 		 * gets more queued than its own buffer.
 		 */
-		n = 2 * (params_period_size(params) / urb);
+		unsigned int n_auto;
+
+		n_auto = 2 * (params_period_size(params) / urb);
 		if (bf_split_period(r, params_period_size(params)))
-			n--;
-		n = clamp_t(unsigned int, n, 2, chip->nurbs);
+			n_auto--;
+		n_auto = clamp_t(unsigned int, n_auto, 2, chip->nurbs);
+		/* out_urbs caps the OUT queue only: it trades the slack
+		 * against a late handler for latency, and never queues more
+		 * than the two periods.  The session period still follows the
+		 * two periods, so the cap does not bind the other direction.
+		 */
+		n = chip->out_urbs ? min(chip->out_urbs, n_auto) : n_auto;
+		chip->session_period = urb * DIV_ROUND_UP(n_auto, 2);
 		if (urb != chip->urb_frames || n != chip->urbs_active) {
 			/* This application's other direction may still
 			 * run: stop it with an xrun, prepare() refuses it
@@ -1451,6 +1536,7 @@ static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
 static int frames_per_urb = BF_FRAMES_PER_URB_DEFAULT;
 static int urb_frames_min = 32;
 static int nurbs = BF_NURBS_DEFAULT;
+static int out_urbs;
 static int panel_poll_ms = BF_PANEL_POLL_MS_DEFAULT;
 
 module_param_array(index, int, NULL, 0444);
@@ -1464,9 +1550,46 @@ MODULE_PARM_DESC(urb_frames_min, "Smallest URB in audio frames, 8..1024 (32 = de
 module_param(urb_split, int, 0444);
 MODULE_PARM_DESC(urb_split, "Split the period into two URBs, queueing 1.5 periods instead of 2: 0 = auto (default), 1 = never, 2 = always.");
 module_param(nurbs, int, 0444);
-MODULE_PARM_DESC(nurbs, "Most URBs in flight per direction, 2..16 (8 = default).");
+MODULE_PARM_DESC(nurbs, "Capture URBs in flight, and the most playback URBs, 2..16 (8 = default).");
+module_param(out_urbs, int, 0444);
+MODULE_PARM_DESC(out_urbs, "Most playback URBs in flight, 2..16 (0 = default: two periods' worth). Each one is latency.");
 module_param(panel_poll_ms, int, 0444);
 MODULE_PARM_DESC(panel_poll_ms, "Front-panel poll interval in ms, 10..1000 (20 = default, matches Windows' ~50 Hz).");
+
+/* /proc/asound/cardN/stream: the session's geometry, and how close each
+ * URB queue came to running dry (bf_qstat_update()).
+ */
+static void babyface_proc_stream(struct snd_info_entry *entry,
+				 struct snd_info_buffer *buf)
+{
+	static const char * const dir[2] = { "playback", "capture" };
+	struct snd_usb_babyface *chip = entry->private_data;
+	unsigned int inflight[2];
+	struct bf_qstat q[2];
+	s64 slack[2];
+	int s;
+
+	guard(mutex)(&chip->mutex);
+	if (!chip->streaming) {
+		snd_iprintf(buf, "stopped\n");
+		return;
+	}
+	scoped_guard(spinlock_irq, &chip->lock) {
+		memcpy(q, chip->qstat, sizeof(q));
+		inflight[SNDRV_PCM_STREAM_PLAYBACK] = chip->out_inflight;
+		inflight[SNDRV_PCM_STREAM_CAPTURE] = chip->nurbs;
+	}
+	for (s = 0; s < 2; s++)
+		slack[s] = bf_queue_slack_ns(chip, inflight[s]);
+
+	snd_iprintf(buf, "rate: %u\n", chip->rate);
+	snd_iprintf(buf, "urb frames: %u\n", chip->urb_frames);
+	for (s = 0; s < 2; s++)
+		snd_iprintf(buf,
+			    "%s: urbs %u, slack %lld us, latest %lld us, ran dry %u\n",
+			    dir[s], inflight[s], div_s64(slack[s], NSEC_PER_USEC),
+			    div_s64(q[s].late_max_ns, NSEC_PER_USEC), q[s].dry);
+}
 
 static void babyface_private_free(struct snd_card *card)
 {
@@ -1557,8 +1680,10 @@ static int babyface_probe(struct usb_interface *intf,
 	chip->urb_frames_min = min_t(unsigned int,
 				     clamp(urb_frames_min, 8, 1024) & ~7,
 				     chip->frames_per_urb);
+	chip->out_urbs = out_urbs ? clamp(out_urbs, 2, 16) : 0;
 	chip->urb_frames = chip->frames_per_urb;
 	chip->urbs_active = chip->nurbs;
+	chip->session_period = chip->urb_frames * DIV_ROUND_UP(chip->nurbs, 2);
 	chip->rate = 48000;
 	chip->alt = BF_ALT_1;
 	chip->frame_bytes = 56;
@@ -1759,6 +1884,13 @@ static int babyface_probe(struct usb_interface *intf,
 	err = babyface_create_eq(chip);
 	if (err < 0) {
 		dev_err(&intf->dev, "EQ control creation failed: %d\n", err);
+		goto error;
+	}
+
+	err = snd_card_ro_proc_new(chip->card, "stream", chip,
+				   babyface_proc_stream);
+	if (err < 0) {
+		dev_err(&intf->dev, "proc entry creation failed: %d\n", err);
 		goto error;
 	}
 

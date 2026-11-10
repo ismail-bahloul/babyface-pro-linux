@@ -22,9 +22,14 @@
  * the authoritative reference.
  *
  * Stream notes (hardware-validated 2026-08):
- *   - The URB size follows the application's period, and enough URBs
- *     stay in flight to cover two periods (bf_urb_frames(), hw_params):
- *     between urb_frames_min and frames_per_urb, at most nurbs URBs.
+ *   - The URB size follows the application's period, and enough OUT
+ *     URBs stay in flight to cover two periods (bf_urb_frames(),
+ *     hw_params): between urb_frames_min and frames_per_urb, at most
+ *     nurbs URBs, and at most out_urbs when that is set.  Every OUT URB
+ *     queued is latency, since the next frame written waits behind it.
+ *     The IN queue is always nurbs deep: IN URBs fill one after the
+ *     other, so more of them cost no latency, only slack against a late
+ *     completion handler.
  *     A URB must be a whole number of alt packets - the device delivers IN
  *     data in alt-sized packets (448/640/1024 B, 8/16/32 frames for
  *     alt 1/2/3), and smaller URBs get -EOVERFLOW (babble).
@@ -38,7 +43,9 @@
  *     any scheduler hiccup overruns a 0.33 ms ring) - fine for
  *     monitoring, not for clean recording.
  *   - The device only advances the stream while BOTH endpoints have a
- *     pending URB - IN and OUT are always submitted as a pair.
+ *     pending URB, so an OUT queue that runs dry stalls the capture as
+ *     well.  /proc/asound/cardN/stream counts the completions that came
+ *     too late for their queue (bf_qstat_update()).
  *   - SET_INTERFACE(5, alt) selects single/double/quad speed and USB
  *     packet capacity; the BASE rate is the family register (request
  *     0x10, index 0x0030: 32k / 44.1k / 48k family), from which the
@@ -328,6 +335,18 @@ struct bf_eq_channel {
 	s32 shared;		/* cached c4 (shared by the slots) */
 };
 
+/* The completion timing of one direction's URBs, for /proc.  Under
+ * chip->lock; see bf_qstat_update().
+ */
+struct bf_qstat {
+	bool started;
+	ktime_t t0;		/* the session's first completion */
+	u64 frames;		/* frames completed since t0 */
+	s64 base_ns;		/* offset of an on-time completion */
+	s64 late_max_ns;	/* the latest completion, past base_ns */
+	unsigned int dry;	/* completions later than the queue's slack */
+};
+
 struct snd_usb_babyface {
 	struct snd_card *card;
 	struct usb_device *dev;
@@ -347,7 +366,9 @@ struct snd_usb_babyface {
 	unsigned int frames_per_urb;	/* URB buffer size: the largest URB */
 	unsigned int urb_frames_min;	/* smallest URB a period may choose */
 	unsigned int urb_frames;	/* this session's URB size */
-	unsigned int urbs_active;	/* this session's URBs in flight */
+	unsigned int urbs_active;	/* this session's OUT URBs in flight */
+	unsigned int out_urbs;		/* cap on the OUT URBs, 0 = none */
+	unsigned int session_period;	/* the shortest period that fits */
 	int session_dir;		/* the direction that chose them */
 	unsigned int frame_bytes;	/* 56/40/32 for alt 1/2/3 */
 	unsigned int rate;
@@ -374,6 +395,7 @@ struct snd_usb_babyface {
 	 */
 	ktime_t in_done;
 	unsigned int out_inflight;
+	struct bf_qstat qstat[2];	/* per direction, this session */
 
 	/* mixer state (no gain readback exists - host-side mirror) */
 	u8 flag_cnt;			/* 0xc000/0x4000/0x8000/0x0000 */

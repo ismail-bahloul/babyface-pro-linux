@@ -5,8 +5,10 @@
 - **Ask your sound server for a small period.** The driver follows it: the
   latency you get is set by the period (PipeWire's *quantum*, a DAW's
   *buffer size*), not by a module option.
-- The module options only matter for periods **below 32 frames**. At 64, 128
-  or 256 frames they change nothing, so leave them alone.
+- Below **32 frames**, the module options make the smaller periods
+  available. From 64 frames up, `frames_per_urb=32 out_urbs=2` shortens the
+  round trip, by 6.7 ms at 256 frames. It is not the default yet: see
+  [Shorter URBs at long periods](#shorter-urbs-at-long-periods).
 - A fresh install runs the TotalMix-parity **256 frames (about 5.3 ms at
   48 kHz)** when an application asks for that, and is stable everywhere.
 
@@ -21,7 +23,8 @@ At 48 kHz, 48 frames are 1 ms.
 | **URB** | one USB transfer. The driver moves audio in URBs, and an URB never holds more than one period |
 | `urb_frames_min` | the smallest URB, in frames (default **32**). It is also the **smallest period the card accepts**: ask for less and the application is given this much, so lower it to go lower |
 | `frames_per_urb` | the largest URB, in frames (default **256**). A longer period is split into several URBs |
-| `nurbs` | the most URBs queued in flight per direction (default **8**). A ceiling on the queue, which is there to ride out scheduling hiccups. Raise it together with a very small period; it is not a latency knob |
+| `nurbs` | the capture URBs queued in flight, and the most playback URBs (default **8**). The capture queue rides out scheduling hiccups and costs no latency, since its URBs fill one after the other. Raise it together with a very small period |
+| `out_urbs` | the most playback URBs in flight (default **0**: two periods' worth, at most `nurbs`). Each one is latency, because the next frame written waits behind them; fewer leave less slack against a late interrupt |
 
 So with the defaults, any period from 32 frames (0.67 ms) up gets URBs of
 its own size, and the options below are only needed to go lower. While
@@ -141,6 +144,91 @@ written with `read`/`write`, not mmap. A run with PH3/4 cabled into IN3 (run
 the script with `DETECT=2`) would add the converters; there is no such
 figure here yet.
 
+## Shorter URBs at long periods
+
+At a long period the URBs are long as well, and two queues follow from them.
+A frame the application writes waits behind the playback URBs already in
+flight, about one period's worth. A recorded frame waits until its capture
+URB is full, up to one more period. Short URBs and a short playback queue
+remove most of both:
+
+```
+options snd-usb-babyface-pro frames_per_urb=32 out_urbs=2
+```
+
+(`out_urbs=3` adds 0.67 ms and some slack; see the soaks below.)
+
+Measured on 2026-11-10 on a Babyface Pro FS at 48 kHz. The test program
+reads one period and then writes one, as a DAW does, with a buffer of 2
+periods, real-time priority, and the AS1/2 digital loopback. The time runs
+from the write of an impulse to the read that brings it back: the round trip
+an application sees. There were 8 seconds and 14 impulses per row, with no
+xrun:
+
+| period | defaults | `frames_per_urb=32 out_urbs=2` | class-compliant mode |
+|---|---|---|---|
+| 32 (0.67 ms) | 3.6 ms | 3.6 ms (the same URBs) | 1.6 ms |
+| 64 (1.33 ms) | 6.2 ms | 4.9 ms | not measured: an xrun |
+| 128 (2.67 ms) | 10.2 ms | 7.6 ms | 5.6 ms |
+| 256 (5.33 ms) | 19.6 ms | 12.9 ms | 11.3 ms |
+
+The defaults column matches the PipeWire figures above. The class-compliant
+mode runs the generic USB audio driver. It hands playback to the card as soon
+as the application writes it, and records in URBs of at most 1 ms. About 2 ms
+are left between it and the short URBs, at every period: one 32-frame URB
+each way, and the card's own delay.
+
+### Soaks
+
+Ten minutes each (2026-11-10), 48 kHz, 12 playback channels, mmap,
+real-time priority (`chrt -f 70`), `frames_per_urb=32`:
+
+| period | `out_urbs` | xruns (play / capture) | playback queue ran dry | latest completion |
+|---|---|---|---|---|
+| 64 | 2 | 0 / 0 | 0 | 625 us |
+| 128 | 2 | 0 / 0 | **4** | 1692 us |
+| 128 | 3 | 0 / 0 | 0 | 384 us |
+| 256 | 2 | 0 / 0 | 0 | 581 us |
+
+ALSA saw no xrun in any of them, and the loopback tone was intact. At 128
+frames with two playback URBs, though, the card was left without data four
+times: one event of about 1.7 ms was later than the 0.67 ms that two
+32-frame URBs last. The card holds the whole stream while that happens, and
+I do not know whether it can be heard. With three playback URBs (1.33 ms of
+slack, 0.67 ms more latency) the same run had none. That is one run each, so
+it does not show that three is enough, only that two is not always.
+
+So `out_urbs=2` is the lowest latency, with the least slack against a late
+interrupt, and `out_urbs=3` costs one 32-frame URB for more of it. Neither
+is the default: the defaults went through longer soaks and on more rates,
+and these have only had the runs above. 32-frame URBs mean about 1,500
+interrupts a second in each direction at every period. Look at the "ran dry"
+count in `/proc/asound/cardN/stream` (below) after a long session on your own
+machine before relying on either.
+
+### Watching the queues
+
+`/proc/asound/cardN/stream` shows the running session:
+
+```
+rate: 48000
+urb frames: 32
+playback: urbs 2, slack 666 us, latest 108 us, ran dry 0
+capture: urbs 8, slack 4666 us, latest 110 us, ran dry 0
+```
+
+- **urbs**: the URBs in flight in each direction.
+- **slack**: how late an URB's completion may be handled before its queue
+  is empty.
+- **latest**: the latest a completion has been handled this session,
+  against the card's clock.
+- **ran dry**: the times it was later than the slack. The card holds the
+  whole stream while the playback queue is empty, so each one is a gap in
+  both directions, and ALSA does not report it as an xrun.
+
+The figures start again with every session, when the first application sets
+the card up.
+
 ## Measuring your own
 
 Be careful what your tool reports. The total round trip (output to input) is
@@ -155,10 +243,10 @@ against residual, at the same period and rate.
 (stop nothing, but keep the card free of other streams, and turn the monitors
 down: it plays a click on playback channels 1/2).
 
-There is no latency figure here for the class-compliant mode, which uses the
-generic USB audio driver with its own buffering. If you compare the two modes
-and find a large difference, please open an issue with the period, the rate,
-the tool, and whether it reports a total or a residual.
+For the class-compliant mode, see
+[Shorter URBs at long periods](#shorter-urbs-at-long-periods). If you compare
+the two modes and find a different gap, please open an issue with the period,
+the rate, the tool, and whether it reports a total or a residual.
 
 ## Known issues
 

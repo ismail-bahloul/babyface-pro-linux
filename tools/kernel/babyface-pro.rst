@@ -120,7 +120,13 @@ The size of the URBs follows the period the application asks for, so
 the latency follows the application's buffer instead of a fixed queue:
 ``hw_params`` splits the period into the fewest URBs of at most
 ``frames_per_urb`` frames, each a whole number of the device's IN
-packets, and keeps two periods' worth in flight (at most ``nurbs``).
+packets, and keeps two periods' worth of OUT URBs in flight (at most
+``nurbs``, or ``out_urbs`` when that is set), since each one queued is
+latency.  The IN queue is always ``nurbs`` deep: IN URBs fill one after
+the other, so a deeper queue costs no latency.  The device holds both
+directions while the OUT queue is empty, and ALSA does not see that as an
+xrun, so ``/proc/asound/cardN/stream`` counts the completions that came
+too late for their queue.
 The URB handlers copy to and from the ring the core allocates and take
 the application's position from the shared control page, so the ring can
 also be mapped by the application, which JACK requires.
