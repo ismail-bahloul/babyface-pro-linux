@@ -581,11 +581,11 @@ static bool babyface_playback_copy(struct snd_usb_babyface *chip,
  * the URBs still in flight behind it.
  */
 static s64 bf_queue_slack_ns(struct snd_usb_babyface *chip,
-			     unsigned int inflight)
+			     unsigned int inflight, unsigned int urb_frames)
 {
 	if (inflight < 2)
 		return 0;
-	return mul_u64_u32_div((u64)(inflight - 1) * chip->urb_frames,
+	return mul_u64_u32_div((u64)(inflight - 1) * urb_frames,
 			       NSEC_PER_SEC, chip->rate);
 }
 
@@ -624,7 +624,8 @@ static void bf_qstat_update(struct snd_usb_babyface *chip, int dir,
 		return;
 	}
 	q->late_max_ns = max(q->late_max_ns, late);
-	slack = bf_queue_slack_ns(chip, inflight);
+	slack = bf_queue_slack_ns(chip, inflight, dir == SNDRV_PCM_STREAM_PLAYBACK ?
+				  chip->out_urb_frames : chip->urb_frames);
 	if (late > slack) {
 		q->dry++;
 		q->base_ns += late - slack;
@@ -883,6 +884,7 @@ void babyface_pcm_stop_both(struct snd_usb_babyface *chip, snd_pcm_state_t state
 static int babyface_stream_start(struct snd_usb_babyface *chip)
 {
 	unsigned int urbsize = chip->frame_bytes * chip->urb_frames;
+	unsigned int out_urbsize = chip->frame_bytes * chip->out_urb_frames;
 	s64 since;
 	int i, ret;
 
@@ -934,10 +936,10 @@ static int babyface_stream_start(struct snd_usb_babyface *chip)
 	}
 	for (i = 0; i < chip->urbs_active; i++) {
 		/* Do not replay data from the previous stream/format. */
-		memset(chip->buf_out[i], 0, urbsize);
+		memset(chip->buf_out[i], 0, out_urbsize);
 		usb_fill_int_urb(chip->urbs_out[i], chip->dev,
 				 usb_sndintpipe(chip->dev, BF_EP_OUT),
-				 chip->buf_out[i], urbsize,
+				 chip->buf_out[i], out_urbsize,
 				 babyface_complete_out, chip, 1);
 		chip->urbs_out[i]->transfer_dma = chip->dma_out[i];
 		chip->urbs_out[i]->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
@@ -978,8 +980,9 @@ static int babyface_stream_start(struct snd_usb_babyface *chip)
 		goto err;
 
 	dev_dbg(&chip->dev->dev,
-		"stream started (%u frames/URB, %u IN and %u OUT URBs)\n",
-		chip->urb_frames, chip->nurbs, chip->urbs_active);
+		"stream started (%u IN URBs of %u frames, %u OUT URBs of %u)\n",
+		chip->nurbs, chip->urb_frames, chip->urbs_active,
+		chip->out_urb_frames);
 	return 0;
 
 err:
@@ -1044,6 +1047,7 @@ static unsigned int bf_session_period(struct snd_usb_babyface *chip)
 }
 
 static int urb_split;
+static int out_urb_frames;
 
 /* Does this session split its period into two URBs?  Then the queue is
  * three URBs, one and a half periods, instead of four URBs, two periods:
@@ -1335,7 +1339,7 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 		 * whole URBs, see bf_session_period()), so neither direction
 		 * gets more queued than its own buffer.
 		 */
-		unsigned int n_auto;
+		unsigned int n_auto, out_urb;
 
 		n_auto = 2 * (params_period_size(params) / urb);
 		if (bf_split_period(r, params_period_size(params)))
@@ -1346,9 +1350,20 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 		 * than the two periods.  The session period still follows the
 		 * two periods, so the cap does not bind the other direction.
 		 */
-		n = chip->out_urbs ? min(chip->out_urbs, n_auto) : n_auto;
+		/* The OUT URBs may be shorter than the IN ones: the playback
+		 * queue is the latency, and the capture side wants long URBs
+		 * for fewer interrupts.  A queue of the same length in frames
+		 * then takes more of them.
+		 */
+		out_urb = out_urb_frames ?
+			  clamp(rounddown(out_urb_frames, r->min_fpu),
+				r->min_fpu, urb) : urb;
+		n = n_auto * (urb / out_urb);
+		n = chip->out_urbs ? min(chip->out_urbs, n) : n;
+		n = min(n, chip->nurbs);
 		chip->session_period = urb * DIV_ROUND_UP(n_auto, 2);
-		if (urb != chip->urb_frames || n != chip->urbs_active) {
+		if (urb != chip->urb_frames || out_urb != chip->out_urb_frames ||
+		    n != chip->urbs_active) {
 			/* This application's other direction may still
 			 * run: stop it with an xrun, prepare() refuses it
 			 * until it fits the new session.
@@ -1359,6 +1374,7 @@ static int babyface_pcm_hw_params(struct snd_pcm_substream *subs,
 						       SNDRV_PCM_STATE_XRUN);
 			}
 			chip->urb_frames = urb;
+			chip->out_urb_frames = out_urb;
 			chip->urbs_active = n;
 			dev_dbg(&chip->dev->dev,
 				"URBs: %u x %u frames for period %u, buffer %u\n",
@@ -1505,7 +1521,8 @@ static snd_pcm_uframes_t bf_delay(struct snd_usb_babyface *chip,
 		return moved + bf_device_delay[chip->alt].capture;
 	if (chip->out_inflight < 2)
 		return 0;
-	return (chip->out_inflight - 1) * urb - moved +
+	moved = min(moved, chip->out_urb_frames);
+	return (chip->out_inflight - 1) * chip->out_urb_frames - moved +
 	       bf_device_delay[chip->alt].playback;
 }
 
@@ -1551,6 +1568,8 @@ module_param(urb_split, int, 0444);
 MODULE_PARM_DESC(urb_split, "Split the period into two URBs, queueing 1.5 periods instead of 2: 0 = auto (default), 1 = never, 2 = always.");
 module_param(nurbs, int, 0444);
 MODULE_PARM_DESC(nurbs, "Capture URBs in flight, and the most playback URBs, 2..16 (8 = default).");
+module_param(out_urb_frames, int, 0444);
+MODULE_PARM_DESC(out_urb_frames, "Playback URB size in audio frames, a whole number of device packets (0 = same as capture's). Shorter playback URBs cut latency; capture keeps its longer ones.");
 module_param(out_urbs, int, 0444);
 MODULE_PARM_DESC(out_urbs, "Most playback URBs in flight, 2..16 (0 = default: two periods' worth). Each one is latency.");
 module_param(panel_poll_ms, int, 0444);
@@ -1564,7 +1583,7 @@ static void babyface_proc_stream(struct snd_info_entry *entry,
 {
 	static const char * const dir[2] = { "playback", "capture" };
 	struct snd_usb_babyface *chip = entry->private_data;
-	unsigned int inflight[2];
+	unsigned int inflight[2], ifr, ofr;
 	struct bf_qstat q[2];
 	s64 slack[2];
 	int s;
@@ -1578,12 +1597,16 @@ static void babyface_proc_stream(struct snd_info_entry *entry,
 		memcpy(q, chip->qstat, sizeof(q));
 		inflight[SNDRV_PCM_STREAM_PLAYBACK] = chip->out_inflight;
 		inflight[SNDRV_PCM_STREAM_CAPTURE] = chip->nurbs;
+		ifr = chip->urb_frames;
+		ofr = chip->out_urb_frames;
 	}
-	for (s = 0; s < 2; s++)
-		slack[s] = bf_queue_slack_ns(chip, inflight[s]);
+	slack[SNDRV_PCM_STREAM_PLAYBACK] =
+		bf_queue_slack_ns(chip, inflight[SNDRV_PCM_STREAM_PLAYBACK], ofr);
+	slack[SNDRV_PCM_STREAM_CAPTURE] =
+		bf_queue_slack_ns(chip, inflight[SNDRV_PCM_STREAM_CAPTURE], ifr);
 
 	snd_iprintf(buf, "rate: %u\n", chip->rate);
-	snd_iprintf(buf, "urb frames: %u\n", chip->urb_frames);
+	snd_iprintf(buf, "urb frames: %u in, %u out\n", ifr, ofr);
 	for (s = 0; s < 2; s++)
 		snd_iprintf(buf,
 			    "%s: urbs %u, slack %lld us, latest %lld us, ran dry %u\n",
@@ -1682,6 +1705,7 @@ static int babyface_probe(struct usb_interface *intf,
 				     chip->frames_per_urb);
 	chip->out_urbs = out_urbs ? clamp(out_urbs, 2, 16) : 0;
 	chip->urb_frames = chip->frames_per_urb;
+	chip->out_urb_frames = chip->frames_per_urb;
 	chip->urbs_active = chip->nurbs;
 	chip->session_period = chip->urb_frames * DIV_ROUND_UP(chip->nurbs, 2);
 	chip->rate = 48000;

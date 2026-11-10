@@ -24,6 +24,7 @@ At 48 kHz, 48 frames are 1 ms.
 | `urb_frames_min` | the smallest URB, in frames (default **32**). It is also the **smallest period the card accepts**: ask for less and the application is given this much, so lower it to go lower |
 | `frames_per_urb` | the largest URB, in frames (default **256**). A longer period is split into several URBs |
 | `nurbs` | the capture URBs queued in flight, and the most playback URBs (default **8**). The capture queue rides out scheduling hiccups and costs no latency, since its URBs fill one after the other. Raise it together with a very small period |
+| `out_urb_frames` | the playback URB size, in frames (default **0**: the same as capture's). Shorter playback URBs leave less latency behind the same slack, and capture keeps its longer ones |
 | `out_urbs` | the most playback URBs in flight (default **0**: two periods' worth, at most `nurbs`). Each one is latency, because the next frame written waits behind them; fewer leave less slack against a late interrupt |
 
 So with the defaults, any period from 32 frames (0.67 ms) up gets URBs of
@@ -224,6 +225,41 @@ direction (1,500 at 32 frames). Neither size comes close to the
 class-compliant mode at 32 frames (about 1.3 ms behind it). Look at the "ran
 dry" count in `/proc/asound/cardN/stream` (below) after a long session on
 your own machine before relying on any of these.
+
+### Short playback URBs, long capture URBs
+
+The card does not need the two directions to match, so `out_urb_frames`
+shortens the playback URBs alone. The round trip follows a simple rule,
+measured to the frame in every row: **one period, plus the playback queue
+(URBs in flight times their size), plus 43 frames inside the card**. The
+slack against a late interrupt is the same queue minus its last URB. A
+smaller playback URB therefore buys the same slack with less latency, and
+capture does not have to take the extra interrupts:
+
+```
+options snd-usb-babyface-pro frames_per_urb=32 nurbs=16 out_urb_frames=8 out_urbs=4
+```
+
+| playback URBs | wall time at 32 / 64 / 128 / 256 frames | slack |
+|---|---|---|
+| 2 x 32 | 2.90 / 3.56 / 4.89 / 7.51 ms | 666 us |
+| 2 x 16 | 2.23 / 2.90 / 4.23 / 6.85 ms | 333 us |
+| 4 x 8 | 2.23 / 2.90 / 4.22 / - ms | 500 us |
+| 3 x 8 | 2.06 / 2.73 / 4.05 / - ms | 333 us |
+
+(Add one period for the figures of the tables above.) Ten-minute soaks of
+the capture's 32-frame URBs with 8-frame playback URBs: 4 x 8 had no xrun and
+no dry event at 64 frames (latest 412 us against 500 us); 3 x 8 had none at
+128 frames (latest 303 us against 333 us), but at 64 frames one run lost
+4 capture buffers and ran dry 7 times in a 2.7 ms stall of the whole
+system, and the rerun ran dry once (366 us against 333 us). So **4 x 8 is
+the profile to take**: the latency of two 16-frame URBs, more slack, and
+half the capture interrupts. Playback now takes about 6,000 interrupts a
+second. It was not soaked at 256 frames or at other rates.
+
+At 176.4 and 192 kHz a 32-frame period lost a buffer in the regression suite
+with `frames_per_urb=32 nurbs=16`, with or without `out_urb_frames`:
+a period that short is 0.17 ms there. The rest of the suite passed.
 
 ### Watching the queues
 

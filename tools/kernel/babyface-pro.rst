@@ -126,7 +126,9 @@ latency.  The IN queue is always ``nurbs`` deep: IN URBs fill one after
 the other, so a deeper queue costs no latency.  The device holds both
 directions while the OUT queue is empty, and ALSA does not see that as an
 xrun, so ``/proc/asound/cardN/stream`` counts the completions that came
-too late for their queue.
+too late for their queue.  ``out_urb_frames`` makes the OUT URBs
+shorter than the IN ones, which cuts the latency of a queue of a given
+slack without more IN interrupts.
 The URB handlers copy to and from the ring the core allocates and take
 the application's position from the shared control page, so the ring can
 also be mapped by the application, which JACK requires.

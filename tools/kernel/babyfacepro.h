@@ -27,6 +27,8 @@
  *     hw_params): between urb_frames_min and frames_per_urb, at most
  *     nurbs URBs, and at most out_urbs when that is set.  Every OUT URB
  *     queued is latency, since the next frame written waits behind it.
+ *     out_urb_frames makes them shorter than the IN URBs, as the card
+ *     does not need the two directions to match.
  *     The IN queue is always nurbs deep: IN URBs fill one after the
  *     other, so more of them cost no latency, only slack against a late
  *     completion handler.
@@ -365,7 +367,8 @@ struct snd_usb_babyface {
 	unsigned int nurbs;
 	unsigned int frames_per_urb;	/* URB buffer size: the largest URB */
 	unsigned int urb_frames_min;	/* smallest URB a period may choose */
-	unsigned int urb_frames;	/* this session's URB size */
+	unsigned int urb_frames;	/* this session's IN URB size */
+	unsigned int out_urb_frames;	/* this session's OUT URB size */
 	unsigned int urbs_active;	/* this session's OUT URBs in flight */
 	unsigned int out_urbs;		/* cap on the OUT URBs, 0 = none */
 	unsigned int session_period;	/* the shortest period that fits */

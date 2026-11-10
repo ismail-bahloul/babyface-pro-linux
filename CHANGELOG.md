@@ -9,6 +9,10 @@
   soak at 128 frames, 0 with `out_urbs=3`, twice; see `docs/latency.md`).
   16-frame URBs (`frames_per_urb=16`) take 0.67 ms more off, with 333 us
   of slack at `out_urbs=2`.
+- `out_urb_frames` shortens the playback URBs alone. With
+  `frames_per_urb=32 nurbs=16 out_urb_frames=8 out_urbs=4` the round trip is
+  that of two 16-frame URBs, with more slack. The round trip is one period
+  plus the playback queue plus 43 frames in the card.
 - `/proc/asound/cardN/stream` shows the session's URBs and counts the times
   a queue ran dry, which ALSA does not report as an xrun.
 
