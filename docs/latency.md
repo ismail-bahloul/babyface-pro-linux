@@ -183,12 +183,21 @@ each way, and the card's own delay.
 Ten minutes each (2026-11-10), 48 kHz, 12 playback channels, mmap,
 real-time priority (`chrt -f 70`), `frames_per_urb=32`:
 
-| period | `out_urbs` | xruns (play / capture) | playback queue ran dry | latest completion |
-|---|---|---|---|---|
-| 64 | 2 | 0 / 0 | 0 | 625 us |
-| 128 | 2 | 0 / 0 | **4** | 1692 us |
-| 128 | 3 | 0 / 0 | 0 | 384 us |
-| 256 | 2 | 0 / 0 | 0 | 581 us |
+| period | URB | `out_urbs` | xruns (play / capture) | playback queue ran dry | latest completion |
+|---|---|---|---|---|---|
+| 64 | 32 | 2 | 0 / 0 | 0 | 625 us |
+| 128 | 32 | 2 | 0 / 0 | **4** | 1692 us |
+| 256 | 32 | 2 | 0 / 0 | 0 | 581 us |
+| 64 | 32 | 3 | 0 / 0 | 0 | 399 us |
+| 128 | 32 | 3 | 0 / 0 | 0 | 384 us |
+| 128 | 32 | 3 (2nd run) | 0 / 0 | 0 | 540 us |
+| 256 | 32 | 3 | 0 / 0 | 0 | 197 us |
+| 64 | 16 | 3 | 0 / 0 | 0 | 291 us |
+| 128 | 16 | 3 | 0 / 0 | 0 | 209 us |
+| 64 | 16 | 2 | 0 / 0 | 0 | 298 us |
+| 128 | 16 | 2 | 0 / 0 | 0 | 289 us |
+
+The 16-frame rows ran with `frames_per_urb=16 urb_frames_min=16 nurbs=16`.
 
 ALSA saw no xrun in any of them, and the loopback tone was intact. At 128
 frames with two playback URBs, though, the card was left without data four
@@ -199,12 +208,22 @@ slack, 0.67 ms more latency) the same run had none. That is one run each, so
 it does not show that three is enough, only that two is not always.
 
 So `out_urbs=2` is the lowest latency, with the least slack against a late
-interrupt, and `out_urbs=3` costs one 32-frame URB for more of it. Neither
-is the default: the defaults went through longer soaks and on more rates,
-and these have only had the runs above. 32-frame URBs mean about 1,500
-interrupts a second in each direction at every period. Look at the "ran dry"
-count in `/proc/asound/cardN/stream` (below) after a long session on your own
-machine before relying on either.
+interrupt, and `out_urbs=3` costs one URB for more of it. Neither is the
+default: the defaults went through longer soaks and on more rates, and these
+have only had the runs above.
+
+16-frame URBs take another 0.67 ms off the round trip with the same number
+of URBs (2.2, 2.9, 4.2 and 6.9 ms of wall time at 32, 64, 128 and 256 frames
+with two playback URBs, against 2.9, 3.6, 4.9 and 7.5 ms with 32-frame URBs;
+add one period for the figures in the table above). Two 16-frame URBs leave
+only 333 us of slack, and the latest completion in the soaks was 298 us:
+those ran clean but with almost nothing in reserve. Three 16-frame URBs have
+the latency of two 32-frame ones and the same 666 us of slack, so they gain
+nothing. 16-frame URBs also mean about 3,000 interrupts a second in each
+direction (1,500 at 32 frames). Neither size comes close to the
+class-compliant mode at 32 frames (about 1.3 ms behind it). Look at the "ran
+dry" count in `/proc/asound/cardN/stream` (below) after a long session on
+your own machine before relying on any of these.
 
 ### Watching the queues
 

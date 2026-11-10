@@ -6,7 +6,9 @@
 - `out_urbs` caps the playback URBs in flight. With `frames_per_urb=32
   out_urbs=2` the round trip at 256 frames is 12.9 ms instead of 19.6 ms
   (not the default: the playback queue ran dry 4 times in a 10-minute
-  soak at 128 frames, 0 with `out_urbs=3`; see `docs/latency.md`).
+  soak at 128 frames, 0 with `out_urbs=3`, twice; see `docs/latency.md`).
+  16-frame URBs (`frames_per_urb=16`) take 0.67 ms more off, with 333 us
+  of slack at `out_urbs=2`.
 - `/proc/asound/cardN/stream` shows the session's URBs and counts the times
   a queue ran dry, which ALSA does not report as an xrun.
 
