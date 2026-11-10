@@ -284,6 +284,12 @@ capture: urbs 8, slack 4666 us, latest 110 us, ran dry 0
 The figures start again with every session, when the first application sets
 the card up.
 
+`sh tools/kernel/audio-health.sh 120` reads these counters, and PipeWire's
+xrun count for the card, once a second for 120 seconds, and prints what moved
+and exits 1 if anything did. Start a stream, then run your load next to it (a
+build, a video call) to see whether the profile you chose holds on your
+machine.
+
 ## Measuring your own
 
 Be careful what your tool reports. The total round trip (output to input) is
