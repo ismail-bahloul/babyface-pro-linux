@@ -22,6 +22,18 @@
   -20 dB, which made a quieter level louder. This is what TotalMix writes,
   checked against TotalMix FX on the unit.
 
+### Changed
+- The crosspoints of the stereo sources (AS1/2, the ADAT pairs, the
+  playback pairs) use TotalMix's stereo scale: 0 dB is 0x2000 and the top
+  is +6 dB at 0x4000, where they shared the mono inputs' scale (0 dB =
+  0x16a0, the pan law's centre). Saved levels keep their raw value, so
+  they sound the same and read 3 dB lower. The playback now defaults to
+  TotalMix's 0 dB, 3 dB above the old default.
+- `Width` is replaced by a `<source> Width` control per stereo source,
+  applied to the source's crosspoints into every output, as TotalMix does.
+  The old control wrote fixed values into the AN1 and AN2 crosspoints of
+  two outputs, over the levels set there.
+
 ### Added
 - Probe checks that the streaming altsettings have the expected interrupt
   endpoints before using them.

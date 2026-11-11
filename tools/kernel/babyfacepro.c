@@ -384,12 +384,6 @@ int bf_state_apply_flags(struct snd_usb_babyface *chip)
 	if (ret < 0)
 		return ret;
 
-	if (chip->width) {
-		ret = bf_width_apply(chip, chip->width);
-		if (ret < 0)
-			return ret;
-	}
-
 	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, chip->fx_send, 0x0138);
 	if (ret < 0)
 		return ret;
@@ -1887,6 +1881,12 @@ static int babyface_probe(struct usb_interface *intf,
 	err = babyface_create_xpoints(chip);
 	if (err < 0) {
 		dev_err(&intf->dev, "crosspoint creation failed: %d\n", err);
+		goto error;
+	}
+
+	err = babyface_create_xwidths(chip);
+	if (err < 0) {
+		dev_err(&intf->dev, "width creation failed: %d\n", err);
 		goto error;
 	}
 

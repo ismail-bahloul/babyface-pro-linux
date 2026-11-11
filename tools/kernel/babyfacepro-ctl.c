@@ -232,13 +232,15 @@ int babyface_write_default_mixer(struct snd_usb_babyface *chip)
 	 * on both = mono).  The "cross" registers (L-reg idx_r / R-reg
 	 * idx_l) are cleared.
 	 */
+	for (src = 0; src < 14; src++)
+		chip->xwidth[src] = BF_WIDTH_STEREO;
 	for (out = 0; out < 6; out++) {
 		for (src = 0; src < 14; src++) {
 			/* Only the playback channels are routed out of the
 			 * box; a hardware input stays out of every output
 			 * until a mixer raises its crosspoint.
 			 */
-			level = src < BF_SRC_PB1 ? 0 : BF_FADER_0DB;
+			level = src < BF_SRC_PB1 ? 0 : BF_FADER_STEREO_0DB;
 			ret = bf_xpoint_write(chip, out, src, level, level);
 			if (ret < 0)
 				return ret;
@@ -251,7 +253,7 @@ int babyface_write_default_mixer(struct snd_usb_babyface *chip)
 	/* Mirror the defaults into the control cache (14 controls/output). */
 	for (out = 0; out < 6; out++)
 		for (src = 0; src < 14; src++) {
-			level = src < BF_SRC_PB1 ? 0 : BF_FADER_0DB;
+			level = src < BF_SRC_PB1 ? 0 : BF_FADER_STEREO_0DB;
 			chip->xpoint[out][src][0] = level;
 			chip->xpoint[out][src][1] = level;
 		}
@@ -492,12 +494,40 @@ static int bf_mute_put(struct snd_kcontrol *kctl,
 	return 1;
 }
 
-/* The crosspoint fader is linear in amplitude: BF_FADER_0DB (0x16a0) is
- * unity and BF_FADER_TOP (0x2d41) is exactly twice that, i.e. +6 dB; the
- * whole fader span follows raw = BF_FADER_0DB * 10^(dB/20).  Raw 0 is
- * off.
+/* The crosspoint fader is linear in amplitude, and its top is +6 dB:
+ * BF_FADER_TOP for a mono source (0 dB = BF_FADER_0DB, the pan law's
+ * centre), BF_FADER_STEREO_TOP for a stereo one (0 dB = 0x2000).  The
+ * control's maximum is that top, so one TLV fits both.  Raw 0 is off.
  */
 static const DECLARE_TLV_DB_LINEAR(bf_xpoint_tlv, TLV_DB_GAIN_MUTE, 600);
+
+/* The same level on the mono and the stereo scale (0x16a0 = 0x2000). */
+static u16 bf_xpoint_mono_to_stereo(u16 raw)
+{
+	return (u16)min_t(u32, ((u32)raw * BF_FADER_STEREO_0DB +
+				BF_FADER_0DB / 2) / BF_FADER_0DB,
+			  BF_FADER_STEREO_TOP);
+}
+
+static u16 bf_xpoint_stereo_to_mono(u16 raw)
+{
+	return (u16)(((u32)raw * BF_FADER_0DB + BF_FADER_STEREO_0DB / 2) /
+		     BF_FADER_STEREO_0DB);
+}
+
+/* The top of a source's crosspoint control: +6 dB on its own scale. */
+static u16 bf_xpoint_top(int src)
+{
+	return src < BF_SRC_STEREO ? BF_FADER_TOP : BF_FADER_STEREO_TOP;
+}
+
+/* (1 + w) / 2 of a level, w in hundredths (-100..100), rounded: 0x2000
+ * at w = 98 gives 0x1fae and its complement 0x0052, as TotalMix writes.
+ */
+static u16 bf_width_part(u16 level, int w)
+{
+	return (u16)(((u32)level * (u32)(100 + w) + 100) / 200);
+}
 
 /* Write a crosspoint slot on the wire: the pair's block of the map, see
  * BF_REG_XPOINT_BASE_L.
@@ -520,21 +550,44 @@ int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
 		    u16 l, u16 r)
 {
 	const struct bf_source *s = &bf_sources[src];
+	u16 base_l = BF_REG_XPOINT_BASE_L + BF_REG_XPOINT_STRIDE * out;
+	u16 base_r = BF_REG_XPOINT_BASE_R + BF_REG_XPOINT_STRIDE * out;
 	u16 flag = 0;
-	int ret;
+	int w, ret;
 
 	if (out) {
 		flag = bf_flag_cycle[chip->flag_cnt];
 		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 	}
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l,
-			      (BF_REG_XPOINT_BASE_L +
-			       BF_REG_XPOINT_STRIDE * out + s->idx_l) | flag);
+	if (src < BF_SRC_STEREO) {
+		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l,
+				      (base_l + s->idx_l) | flag);
+		if (ret < 0)
+			return ret;
+		return bf_vendor_write(chip, BF_REQ_CROSSPOINT, r,
+				       (base_r + s->idx_r) | flag);
+	}
+
+	/* A stereo source's width, as TotalMix FX writes it: each output
+	 * side takes that side's level, (1 + w) / 2 of it from the source's
+	 * own channel and (1 - w) / 2 from the other one.  At +1.00 the
+	 * cross terms are 0.  In the order TotalMix sends them.
+	 */
+	w = chip->xwidth[src];
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(l, w),
+			      (base_l + s->idx_l) | flag);
 	if (ret < 0)
 		return ret;
-	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, r,
-			       (BF_REG_XPOINT_BASE_R +
-				BF_REG_XPOINT_STRIDE * out + s->idx_r) | flag);
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(r, -w),
+			      (base_r + s->idx_l) | flag);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(l, -w),
+			      (base_l + s->idx_r) | flag);
+	if (ret < 0)
+		return ret;
+	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(r, w),
+			       (base_r + s->idx_r) | flag);
 }
 
 static int bf_xpoint_info(struct snd_kcontrol *kctl,
@@ -543,7 +596,7 @@ static int bf_xpoint_info(struct snd_kcontrol *kctl,
 	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
 	uinfo->count = 2;
 	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = BF_FADER_TOP;	/* +6 dB fader top */
+	uinfo->value.integer.max = bf_xpoint_top(kctl->private_value & 0xff);
 	uinfo->value.integer.step = 1;
 	return 0;
 }
@@ -574,7 +627,8 @@ static int bf_xpoint_put(struct snd_kcontrol *kctl,
 	/* Check before narrowing: a value of 0x10000 or more would wrap to a
 	 * passing u16 (see the note in bf_master_put()).
 	 */
-	if (nl < 0 || nl > BF_FADER_TOP || nr < 0 || nr > BF_FADER_TOP)
+	if (nl < 0 || nl > bf_xpoint_top(src) ||
+	    nr < 0 || nr > bf_xpoint_top(src))
 		return -EINVAL;
 	l = nl;
 	r = nr;
@@ -808,20 +862,35 @@ static int bf_phase_put(struct snd_kcontrol *kctl,
  */
 int bf_split_apply(struct snd_usb_babyface *chip, int pb, bool split)
 {
-	const struct bf_source *s = &bf_sources[8 + pb];
-	u16 l = split ? 0x2000 : chip->xpoint[0][8 + pb][0];
-	u16 r = split ? 0x0000 : chip->xpoint[0][8 + pb][1];
+	const struct bf_source *s = &bf_sources[BF_SRC_PB1 + pb];
 	int ret;
+
+	/* Joining goes back to the cached crosspoint, with the pair's
+	 * width on top.
+	 */
+	if (!split)
+		return bf_xpoint_write(chip, 0, BF_SRC_PB1 + pb,
+				       chip->xpoint[0][BF_SRC_PB1 + pb][0],
+				       chip->xpoint[0][BF_SRC_PB1 + pb][1]);
 
 	/* The AN1/2 block.  The same values also went to a "standard map"
 	 * half at 0x0068, which is AS1/2's submix, not part of AN1/2: it
-	 * overwrote AS1/2's own crosspoint for this playback pair.
+	 * overwrote AS1/2's own crosspoint for this playback pair.  The
+	 * cross terms a width leaves are cleared too.
 	 */
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l,
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x2000,
 			      BF_REG_XPOINT_BASE_L + s->idx_l);
 	if (ret < 0)
 		return ret;
-	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, r,
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000,
+			      BF_REG_XPOINT_BASE_R + s->idx_l);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000,
+			      BF_REG_XPOINT_BASE_L + s->idx_r);
+	if (ret < 0)
+		return ret;
+	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000,
 			       BF_REG_XPOINT_BASE_R + s->idx_r);
 }
 
@@ -1815,85 +1884,84 @@ static int bf_dim_put(struct snd_kcontrol *kctl,
 	return ret;
 }
 
-static int bf_width_info(struct snd_kcontrol *kctl,
-			 struct snd_ctl_elem_info *uinfo)
+/* Width of a stereo source (TotalMix FX's width knob, -1.00..+1.00 in
+ * hundredths): +1.00 is plain stereo, 0 is mono, -1.00 swaps the sides.
+ * It is a property of the source, so it applies to the source's
+ * crosspoints into every output; see bf_xpoint_write().
+ */
+static int bf_xwidth_info(struct snd_kcontrol *kctl,
+			  struct snd_ctl_elem_info *uinfo)
 {
 	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
 	uinfo->count = 1;
-	uinfo->value.integer.min = -100;
-	uinfo->value.integer.max = 100;
+	uinfo->value.integer.min = -BF_WIDTH_STEREO;
+	uinfo->value.integer.max = BF_WIDTH_STEREO;
 	uinfo->value.integer.step = 1;
 	return 0;
 }
 
-static int bf_width_get(struct snd_kcontrol *kctl,
-			struct snd_ctl_elem_value *ucontrol)
+static int bf_xwidth_get(struct snd_kcontrol *kctl,
+			 struct snd_ctl_elem_value *ucontrol)
 {
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
 
-	ucontrol->value.integer.value[0] = chip->width;
+	ucontrol->value.integer.value[0] = chip->xwidth[kctl->private_value];
 	return 0;
 }
 
-/* Width spread: L = 0x1000*(1+w), R = 0x1000*(1-w), L+R = 0x2000.
- * TotalMix writes the strip's src pair on the AN1/2 block (0x0000)
- * and on the block at 0x0034 (cap_width3-7): the stereo pair spreads
- * L/R in opposition, the mirror src (AN2) gets the swapped values.
- * Caller holds chip->mutex.
- */
-int bf_width_apply(struct snd_usb_babyface *chip, int w)
-{
-	u16 l = (u16)(((0x2000 * (100 + w) / 2) + 50) / 100);
-	u16 r = 0x2000 - l;
-	int ret;
-
-	/* AN1/2: AN1 L=0x0000, R=0x001A; AN2 L=0x0001, R=0x001B. */
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l, 0x0000);
-	if (ret < 0)
-		return ret;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r, 0x001a);
-	if (ret < 0)
-		return ret;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r, 0x0001);
-	if (ret < 0)
-		return ret;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l, 0x001b);
-	if (ret < 0)
-		return ret;
-	/* The 0x0034 block: AN1 L=0x0034, R=0x004E; AN2 L=0x0035,
-	 * R=0x004F.  TotalMix writes it in the same drag, so keep the
-	 * two halves together here and in the state replay.
-	 */
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l, 0x0034);
-	if (ret < 0)
-		return ret;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r, 0x004e);
-	if (ret < 0)
-		return ret;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, r, 0x0035);
-	if (ret < 0)
-		return ret;
-	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, l, 0x004f);
-}
-
-static int bf_width_put(struct snd_kcontrol *kctl,
-			struct snd_ctl_elem_value *ucontrol)
+static int bf_xwidth_put(struct snd_kcontrol *kctl,
+			 struct snd_ctl_elem_value *ucontrol)
 {
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	int src = kctl->private_value;
 	long w = ucontrol->value.integer.value[0];
-	int ret = 0;
+	int out, ret;
+	s8 old;
 
-	if (w < -100 || w > 100)
+	if (w < -BF_WIDTH_STEREO || w > BF_WIDTH_STEREO)
 		return -EINVAL;
 
 	guard(mutex)(&chip->mutex);
-	if ((int)w == chip->width)
+	if (w == chip->xwidth[src])
 		return 0;
-	ret = bf_width_apply(chip, (int)w);
-	if (ret < 0)
-		return ret;
-	chip->width = w;
+	old = chip->xwidth[src];
+	chip->xwidth[src] = w;
+	for (out = 0; out < 6; out++) {
+		ret = bf_xpoint_write(chip, out, src, chip->xpoint[out][src][0],
+				      chip->xpoint[out][src][1]);
+		if (ret < 0) {
+			chip->xwidth[src] = old;
+			return ret;
+		}
+	}
 	return 1;
+}
+
+int babyface_create_xwidths(struct snd_usb_babyface *chip)
+{
+	struct snd_kcontrol *kctl;
+	int src, err;
+
+	for (src = BF_SRC_STEREO; src < 14; src++) {
+		kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+			.name = "Width",
+			.info = bf_xwidth_info,
+			.get = bf_xwidth_get,
+			.put = bf_xwidth_put,
+			.private_value = src,
+		}, chip);
+		if (!kctl)
+			return -ENOMEM;
+		/* "AS1/2 Width", "PB1 Width"... */
+		strscpy(kctl->id.name, bf_sources[src].name,
+			sizeof(kctl->id.name));
+		strlcat(kctl->id.name, " Width", sizeof(kctl->id.name));
+		err = snd_ctl_add(chip->card, kctl);
+		if (err < 0)
+			return err;
+	}
+	return 0;
 }
 
 static int bf_fx_send_info(struct snd_kcontrol *kctl,
@@ -2037,17 +2105,6 @@ int babyface_create_flags(struct snd_usb_babyface *chip)
 		.info = bf_switch_info,
 		.get = bf_dim_get,
 		.put = bf_dim_put,
-	}, chip);
-	err = snd_ctl_add(chip->card, kctl);
-	if (err < 0)
-		return err;
-
-	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
-		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-		.name = "Width",
-		.info = bf_width_info,
-		.get = bf_width_get,
-		.put = bf_width_put,
 	}, chip);
 	err = snd_ctl_add(chip->card, kctl);
 	if (err < 0)
@@ -2228,7 +2285,13 @@ static int bf_panel_mix_seed(struct snd_usb_babyface *chip)
 	int ref = READ_ONCE(chip->panel_in) == 3 ? 4 :
 		  (READ_ONCE(chip->panel_in) == 2 ? 2 : 0) +
 		  (READ_ONCE(chip->panel_select) == 1 ? 1 : 0);
-	int db2 = bf_fader_raw_to_db2(chip->xpoint[out][ref][0]);
+	u16 raw = chip->xpoint[out][ref][0];
+	int db2;
+
+	/* The curve is the mono one: bring a stereo level onto it. */
+	if (ref >= BF_SRC_STEREO)
+		raw = bf_xpoint_stereo_to_mono(raw);
+	db2 = bf_fader_raw_to_db2(raw);
 
 	/* A muted crosspoint reads as -inf, six steps below the curve's
 	 * first point; seeding there would burn six clockwise clicks
@@ -2283,6 +2346,16 @@ static void bf_panel_mix_wheel(struct snd_usb_babyface *chip, int delta)
 	for (i = 0; i < n; i++) {
 		const struct bf_source *s = &bf_sources[targets[i]];
 
+		if (targets[i] >= BF_SRC_STEREO) {
+			u16 st = bf_xpoint_mono_to_stereo(raw);
+
+			bf_xpoint_write(chip, out, targets[i], st, st);
+			chip->xpoint[out][targets[i]][0] = st;
+			chip->xpoint[out][targets[i]][1] = st;
+			bf_panel_notify_kctl(chip,
+					     chip->xpoint_kctl[out][targets[i]]);
+			continue;
+		}
 		flag = bf_flag_cycle[chip->flag_cnt];
 		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 		bf_vendor_write(chip, BF_REQ_CROSSPOINT, raw,

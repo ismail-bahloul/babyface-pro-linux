@@ -2024,7 +2024,42 @@ distinguished only by the 0x21 wVal 0x0003.
   per-strip width register offsets, mapping still open (5 more
   captures to diff).
 
+### Width and the stereo fader scale — measured against TotalMix FX (2026-11-11)
+
+TotalMix FX in a Windows VM with the unit passed through, usbmon on the
+host.  This supersedes the cap_width3-7 reading below, which predates
+the corrected crosspoint map (`0x34 * pair + 0x1A * side + source`).
+
+- **Width has no register of its own.**  It belongs to a stereo
+  strip (here the playback pair 1/2, sources 12/13) and rewrites that
+  strip's crosspoints into **every output it is routed to** (AN1/2 and
+  PH3/4 in the test), four registers per output, in this order:
+  srcL->outL, srcL->outR, srcR->outL, srcR->outR.
+- With g_L / g_R the output side's level (fader and pan) and w the
+  width (-1.00..+1.00): srcL->outL = g_L(1+w)/2, srcR->outL =
+  g_L(1-w)/2, srcR->outR = g_R(1+w)/2, srcL->outR = g_R(1-w)/2.  At
+  0 dB and w = 0.99/0.98/0.97: 0x1FD7/0x0029, 0x1FAE/0x0052,
+  0x1F85/0x007B.  With the fader at -11.3 dB the same width writes
+  0x088E/0x0021; with the pan to the right (g_L = 0x1E14, g_R =
+  0x2000) it writes 0x1DEE/0x0026 into out L and 0x1FD7/0x0029 into
+  out R.
+- **A stereo strip's 0 dB is 0x2000, its +6 dB 0x4000.**  A mono strip
+  (AN1) centred has 0 dB = 0x16A0 per side (+0.2 dB wrote 0x173C): the
+  -3 dB centre of the pan law.  A stereo strip's pan is a balance:
+  it only lowers one side (0x2000 -> 0x1E14 on L for a few clicks to
+  the right, R stays 0x2000).
+- The driver follows this: the crosspoint controls of the stereo
+  sources top out at 0x4000 (same TLV, +6 dB at the top), the playback
+  defaults to 0x2000, and each stereo source has a `<source> Width`
+  control (-100..100) applied over all outputs.  The old `Width`
+  control, which wrote fixed AN1/AN2 values into AN1/2 and PH3/4, is
+  gone: AN1 and AN2 are mono sources whose four crosspoints are
+  already controls of their own.
+
 ### Width strip mapping — cap_width3-7 ANALYZED (2026-08-26)
+
+*Superseded by the section above.*
+
 
 Every width drag step writes 12 registers in a fixed order: 3 families
 × 4 (the strip's src pair, L first then R, both on the L-map and its

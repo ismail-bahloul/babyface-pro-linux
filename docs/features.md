@@ -15,7 +15,8 @@ playback-solid but drop the occasional capture buffer.
 - 6 output masters and mutes
 - the full 6x14 crosspoint matrix
 - 4 preamp gains, phantom power and PAD
-- pitch/varispeed, loopback, width, FX send, MS processing, input link, AN 1>2
+- pitch/varispeed, loopback, width per stereo source, FX send, MS processing,
+  input link, AN 1>2
 - clock source, optical out format (ADAT/S/PDIF), reference level, phase and
   trim
 

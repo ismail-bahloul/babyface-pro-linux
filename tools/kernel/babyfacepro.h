@@ -293,11 +293,17 @@
 /* DIM's cut, in master steps: 20 dB. */
 #define BF_DIM_STEPS			40
 
-/* Crosspoint fader curve: 0 dB = 0x16a0, +6 dB = 0x2d41 (fader curve,
- * DIFFERENT from the master 0x4000 top - see CALIBRATION.md).
+/* Crosspoint fader curve of a mono source (AN1-4): 0 dB = 0x16a0,
+ * +6 dB = 0x2d41, the -3 dB centre of the pan law (see CALIBRATION.md).
  */
 #define BF_FADER_0DB			0x16a0
 #define BF_FADER_TOP			0x2d41
+/* A stereo source (AS1/2, the ADAT pairs, the playback pairs) has no
+ * pan law: TotalMix FX writes 0x2000 for 0 dB and 0x4000 for +6 dB
+ * (measured 2026-11-11 against TotalMix in a Windows VM).
+ */
+#define BF_FADER_STEREO_0DB		0x2000
+#define BF_FADER_STEREO_TOP		0x4000
 
 /* The crosspoint matrix sources (14 controls per output). */
 struct bf_source {
@@ -316,6 +322,11 @@ extern const struct bf_source bf_sources[14];
  * output until a mixer raises its crosspoint.
  */
 #define BF_SRC_PB1			8
+/* The first stereo source in bf_sources[]: AS1/2.  The four analog
+ * inputs before it are mono.
+ */
+#define BF_SRC_STEREO			4
+#define BF_WIDTH_STEREO			100	/* width: +1.00, plain stereo */
 
 /* One analog-input strip of the DSP EQ (babyfacepro-ctl.c). */
 struct bf_eq_channel {
@@ -430,7 +441,7 @@ struct snd_usb_babyface {
 	bool ms_proc;			/* MS processor engaged */
 	bool clock_optical;		/* clock source: false = Internal (default) */
 	bool optical_spdif;		/* Optical Out: false = ADAT (default) */
-	int width;			/* width knob -100..+100 */
+	s8 xwidth[14];			/* stereo sources' width, -100..100 */
 	u16 fx_send;			/* FX send level 0..0x1000 */
 	u16 dim_saved[2];		/* pre-DIM Phones master (out 1 L/R) */
 	bool dim;			/* DIM engaged (-20 dB on Phones) */
@@ -544,6 +555,7 @@ int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
 		    u16 l, u16 r);
 int babyface_create_masters(struct snd_usb_babyface *chip);
 int babyface_create_xpoints(struct snd_usb_babyface *chip);
+int babyface_create_xwidths(struct snd_usb_babyface *chip);
 int babyface_create_trim(struct snd_usb_babyface *chip);
 int babyface_create_preamp(struct snd_usb_babyface *chip);
 int bf_preamp_state_write(struct snd_usb_babyface *chip);
@@ -554,7 +566,6 @@ int bf_trim_apply(struct snd_usb_babyface *chip, int mic, int trim_db2);
 int bf_gain_max_db(int mic);
 u8 bf_gain_raw(int mic, int db);
 int bf_loopback_write_map(struct snd_usb_babyface *chip, int out, bool on);
-int bf_width_apply(struct snd_usb_babyface *chip, int w);
 int bf_dim_apply(struct snd_usb_babyface *chip, bool on);
 int babyface_create_flags(struct snd_usb_babyface *chip);
 int babyface_create_panel(struct snd_usb_babyface *chip);
