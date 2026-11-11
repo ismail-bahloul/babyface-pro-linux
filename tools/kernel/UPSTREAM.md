@@ -118,6 +118,11 @@ it as the record of what was actually mailed on 2026-09-02.
    stream) is a deliberate follow-up, not implemented/tested this
    round — say so explicitly in the cover letter rather than shipping
    an untested code path.
+   **Changed for v9 (2026-11-11, Sashiko on v8):** both calls are gone.
+   The USB core already forbids autosuspend on a new device, and since
+   the driver does not set `supports_autosuspend` the core keeps the
+   device awake while the interface is bound. The enable at disconnect
+   flipped `power/control` for the whole device, MIDI included.
 4. ~~**The panel poll** runs at 50 Hz continuously (vendor reads).  If~~
    ~~reviewers object to always-on polling, gate it on the card having a~~
    ~~control file open or make the interval a module param.~~

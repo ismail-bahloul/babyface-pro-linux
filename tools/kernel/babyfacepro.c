@@ -911,6 +911,11 @@ err:
 	dev_err_ratelimited(&chip->dev->dev, "failed to start stream: %d\n",
 			    ret);
 	babyface_stream_kill(chip);
+	/* ->streaming was set before the URBs went out, so the other
+	 * direction may have started meanwhile: it has no URBs now, stop it
+	 * with an xrun rather than leave it running on nothing.
+	 */
+	babyface_pcm_stop_both(chip, SNDRV_PCM_STATE_XRUN);
 	return ret;
 }
 
@@ -1064,6 +1069,71 @@ static int bf_hw_rule_rate(struct snd_pcm_hw_params *params,
 				   SNDRV_PCM_HW_PARAM_RATE), &t);
 }
 
+/* The smallest period a rate allows: one URB, which is at least
+ * urb_frames_min and a whole number of that rate's packets.  0 when the
+ * module parameters leave no URB size for the rate (frames_per_urb below
+ * its packet).
+ */
+static unsigned int bf_rate_period_floor(struct snd_usb_babyface *chip,
+					 const struct bf_rate *r)
+{
+	unsigned int hi = rounddown(chip->frames_per_urb, r->min_fpu);
+	unsigned int lo = roundup(max(chip->urb_frames_min, r->min_fpu),
+				  r->min_fpu);
+
+	return hi && lo <= hi ? lo : 0;
+}
+
+/* The period floor follows the rate: at the double and quad speeds a
+ * URB is at least one 16- or 32-frame packet, more than urb_frames_min
+ * may be.  Without this rule a period below the packet passes refinement
+ * and only fails in hw_params().
+ */
+static int bf_hw_rule_period_by_rate(struct snd_pcm_hw_params *params,
+				     struct snd_pcm_hw_rule *rule)
+{
+	struct snd_usb_babyface *chip = rule->private;
+	const struct snd_interval *rate =
+		hw_param_interval_c(params, SNDRV_PCM_HW_PARAM_RATE);
+	struct snd_interval t = { .integer = 1, .min = UINT_MAX,
+				  .max = UINT_MAX };
+	unsigned int i, floor;
+
+	for (i = 0; i < ARRAY_SIZE(bf_rates); i++) {
+		if (bf_rates[i].rate < rate->min ||
+		    bf_rates[i].rate > rate->max)
+			continue;
+		floor = bf_rate_period_floor(chip, &bf_rates[i]);
+		if (floor)
+			t.min = min(t.min, floor);
+	}
+	if (t.min == UINT_MAX)
+		return -EINVAL;
+	return snd_interval_refine(hw_param_interval(params,
+				   SNDRV_PCM_HW_PARAM_PERIOD_SIZE), &t);
+}
+
+/* And the other way: offer only the rates whose floor the period range
+ * still reaches.
+ */
+static int bf_hw_rule_rate_by_period(struct snd_pcm_hw_params *params,
+				     struct snd_pcm_hw_rule *rule)
+{
+	struct snd_usb_babyface *chip = rule->private;
+	const struct snd_interval *period =
+		hw_param_interval_c(params, SNDRV_PCM_HW_PARAM_PERIOD_SIZE);
+	unsigned int list[ARRAY_SIZE(bf_rates)];
+	unsigned int i, n = 0, floor;
+
+	for (i = 0; i < ARRAY_SIZE(bf_rates); i++) {
+		floor = bf_rate_period_floor(chip, &bf_rates[i]);
+		if (floor && floor <= period->max)
+			list[n++] = bf_rates[i].rate;
+	}
+	return snd_interval_list(hw_param_interval(params,
+				 SNDRV_PCM_HW_PARAM_RATE), n, list, 0);
+}
+
 /* While another application holds the session, a period must span its
  * URBs: at least the session's period, in whole URBs.  A rule for the
  * same reason as the rate.
@@ -1117,6 +1187,16 @@ static int babyface_pcm_open(struct snd_pcm_substream *subs)
 		return ret;
 	ret = snd_pcm_hw_rule_add(rt, 0, SNDRV_PCM_HW_PARAM_PERIOD_SIZE,
 				  bf_hw_rule_period, subs,
+				  SNDRV_PCM_HW_PARAM_PERIOD_SIZE, -1);
+	if (ret < 0)
+		return ret;
+	ret = snd_pcm_hw_rule_add(rt, 0, SNDRV_PCM_HW_PARAM_PERIOD_SIZE,
+				  bf_hw_rule_period_by_rate, chip,
+				  SNDRV_PCM_HW_PARAM_RATE, -1);
+	if (ret < 0)
+		return ret;
+	ret = snd_pcm_hw_rule_add(rt, 0, SNDRV_PCM_HW_PARAM_RATE,
+				  bf_hw_rule_rate_by_period, chip,
 				  SNDRV_PCM_HW_PARAM_PERIOD_SIZE, -1);
 	if (ret < 0)
 		return ret;
@@ -1448,6 +1528,11 @@ static const struct snd_pcm_ops babyface_pcm_ops = {
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
+/* Which index[]/id[] entries a card holds: one per unit, kept until the
+ * card is freed, which can be after a re-probe of the same unit.
+ */
+static DEFINE_MUTEX(bf_slots_mutex);
+static DECLARE_BITMAP(bf_slots, SNDRV_CARDS);
 static int frames_per_urb = BF_FRAMES_PER_URB_DEFAULT;
 static int urb_frames_min = 32;
 static int nurbs = BF_NURBS_DEFAULT;
@@ -1468,14 +1553,17 @@ MODULE_PARM_DESC(nurbs, "Most URBs in flight per direction, 2..16 (8 = default).
 module_param(panel_poll_ms, int, 0444);
 MODULE_PARM_DESC(panel_poll_ms, "Front-panel poll interval in ms, 10..1000 (20 = default, matches Windows' ~50 Hz).");
 
-static void babyface_private_free(struct snd_card *card)
+/* Kill and free the stream URBs and their coherent buffers.  The buffers
+ * come from the host controller, which can go away (an unbound or
+ * hot-removed HCD) before the last application closes the card, so
+ * disconnect() calls this once the session is down instead of leaving
+ * it to private_free().  private_free() calls it too, for a probe that
+ * failed, and then finds nothing left after a disconnect.
+ */
+static void bf_free_urbs(struct snd_usb_babyface *chip)
 {
-	struct snd_usb_babyface *chip = card->private_data;
 	unsigned int urbsize;
 	int i;
-
-	if (!chip)
-		return;
 
 	/* The URB arrays are NULL when the probe failed before allocating
 	 * them (snd_card_free runs private_free on any probe error).
@@ -1509,7 +1597,63 @@ static void babyface_private_free(struct snd_card *card)
 	kfree(chip->buf_out);
 	kfree(chip->dma_in);
 	kfree(chip->dma_out);
+	chip->urbs_in = NULL;
+	chip->urbs_out = NULL;
+	chip->buf_in = NULL;
+	chip->buf_out = NULL;
+	chip->dma_in = NULL;
+	chip->dma_out = NULL;
+}
+
+static void babyface_private_free(struct snd_card *card)
+{
+	struct snd_usb_babyface *chip = card->private_data;
+
+	if (!chip)
+		return;
+
+	bf_free_urbs(chip);
+	scoped_guard(mutex, &bf_slots_mutex)
+		__clear_bit(chip->slot, bf_slots);
 	usb_put_dev(chip->dev);
+}
+
+/* The stream URBs are interrupt transfers on fixed endpoints.  Check
+ * that every streaming altsetting of the interface has them, as
+ * interrupt endpoints in the right direction, before anything is
+ * submitted to them: a device that only claims this VID:PID must not get
+ * URBs of the wrong type.
+ */
+static int bf_check_endpoints(struct usb_interface *intf)
+{
+	static const unsigned int alts[] = { BF_ALT_1, BF_ALT_2, BF_ALT_3 };
+	unsigned int a, e;
+
+	for (a = 0; a < ARRAY_SIZE(alts); a++) {
+		struct usb_host_interface *alt =
+			usb_altnum_to_altsetting(intf, alts[a]);
+		bool in = false, out = false;
+
+		if (!alt)
+			goto bad;
+		for (e = 0; e < alt->desc.bNumEndpoints; e++) {
+			const struct usb_endpoint_descriptor *d =
+				&alt->endpoint[e].desc;
+
+			if (!usb_endpoint_xfer_int(d))
+				continue;
+			if (d->bEndpointAddress == BF_EP_IN)
+				in = true;
+			else if (d->bEndpointAddress == BF_EP_OUT)
+				out = true;
+		}
+		if (!in || !out)
+			goto bad;
+	}
+	return 0;
+bad:
+	dev_err(&intf->dev, "unexpected endpoints, not a Babyface Pro\n");
+	return -ENODEV;
 }
 
 static int babyface_probe(struct usb_interface *intf,
@@ -1521,6 +1665,7 @@ static int babyface_probe(struct usb_interface *intf,
 	struct snd_pcm *pcm;
 	unsigned int urbsize;
 	u8 st[4];
+	unsigned int slot;
 	int i, err;
 
 	if (intf->cur_altsetting->desc.bInterfaceNumber != BF_IFACE) {
@@ -1531,26 +1676,41 @@ static int babyface_probe(struct usb_interface *intf,
 		return -ENODEV;
 	}
 
-	err = snd_card_new(&intf->dev, index[0], id[0], THIS_MODULE,
+	err = bf_check_endpoints(intf);
+	if (err < 0)
+		return err;
+
+	/* Each unit takes the first index[]/id[] entry no other card holds,
+	 * as the other USB audio drivers do.
+	 */
+	scoped_guard(mutex, &bf_slots_mutex) {
+		slot = find_first_zero_bit(bf_slots, SNDRV_CARDS);
+		if (slot >= SNDRV_CARDS)
+			return -ENODEV;
+		__set_bit(slot, bf_slots);
+	}
+	err = snd_card_new(&intf->dev, index[slot], id[slot], THIS_MODULE,
 			   sizeof(*chip), &card);
 	if (err < 0) {
 		dev_err(&intf->dev, "snd_card_new failed: %d\n", err);
+		scoped_guard(mutex, &bf_slots_mutex)
+			__clear_bit(slot, bf_slots);
 		return err;
 	}
 	chip = card->private_data;
 	chip->card = card;
+	chip->slot = slot;
+	/* From here on, every error path frees the card, and private_free()
+	 * gives the slot back.
+	 */
+	card->private_free = babyface_private_free;
 
 	chip->dev = usb_get_dev(dev);
-	/* USB autosuspend is untested: babyface_suspend()/_resume() don't
-	 * check PMSG_IS_AUTO, and nothing in this driver holds a PM
-	 * reference while streaming or while the panel poll/keepalive
-	 * timers are running, so an autosuspend request could race a
-	 * live stream or panel tick. Disable it explicitly rather than
-	 * ship an untested code path - full autosuspend support (correct
-	 * autopm_get/put pairing around the stream and the panel/keepalive
-	 * work) is a deliberate follow-up, not an oversight.
+	/* No autosuspend while the interface is bound: the driver does not
+	 * set supports_autosuspend, so the USB core holds the device awake
+	 * for as long as it is claimed.  The device's power/control setting
+	 * is left as it is; it belongs to the whole device, MIDI included.
 	 */
-	usb_disable_autosuspend(chip->dev);
 	chip->iface = intf;
 	chip->nurbs = clamp(nurbs, 2, 16);
 	chip->frames_per_urb = clamp(frames_per_urb, 8, 1024) & ~7;
@@ -1570,7 +1730,6 @@ static int babyface_probe(struct usb_interface *intf,
 	atomic_set(&chip->urb_err, 0);
 	INIT_WORK(&chip->stream_work, babyface_stream_work);
 	INIT_DELAYED_WORK(&chip->panel_work, babyface_panel_work);
-	chip->card->private_free = babyface_private_free;
 
 	/* Model-neutral on purpose.  The FS and the original (2015)
 	 * Babyface Pro share VID:PID 2a39:3fc0, report the same bcdDevice
@@ -1781,11 +1940,6 @@ static int babyface_probe(struct usb_interface *intf,
 
 error:
 	usb_set_intfdata(intf, NULL);
-	/* Balance the probe()-time usb_disable_autosuspend(): disconnect()
-	 * is never called for a failed probe, so the disable would leak and
-	 * leave autosuspend off on this usb_device until a physical unplug.
-	 */
-	usb_enable_autosuspend(chip->dev);
 	snd_card_free(chip->card);
 	return err;
 }
@@ -1816,17 +1970,18 @@ static void babyface_disconnect(struct usb_interface *intf)
 	}
 	cancel_work_sync(&chip->stream_work);
 	babyface_panel_stop(chip);
-	/* Balance the probe()-time usb_disable_autosuspend(): the usb_device
-	 * outlives this interface claim (a usbfs detach re-probes without
-	 * the physical device ever disconnecting), so leaving autosuspend
-	 * disabled here would wrongly affect whatever claims the device next.
-	 */
-	usb_enable_autosuspend(chip->dev);
 	/* Wake apps blocked in read/write: the card is going away. */
 	dev_info(&chip->dev->dev, "disconnect: stopping PCM substreams\n");
 	babyface_pcm_stop_both(chip, SNDRV_PCM_STATE_DISCONNECTED);
 
 	snd_card_disconnect(chip->card);
+	/* The session is down and stays down: prepare() and hw_params()
+	 * see ->shutdown under the mutex.  Free the URBs and their buffers
+	 * now, while the host controller that allocated them is still
+	 * there; an application may keep the card open long after.
+	 */
+	scoped_guard(mutex, &chip->mutex)
+		bf_free_urbs(chip);
 	/* NEVER snd_card_free() here: it blocks until the last user
 	 * closes the card, and an open client (e.g. PipeWire) deadlocks
 	 * the disconnect (seen live: pipewire stuck in snd_card_free,

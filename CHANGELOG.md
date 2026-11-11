@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- The stream URBs and their DMA buffers are freed at disconnect, not when
+  the last application closes the card, after the host controller that
+  allocated them may be gone.
+- A stream that failed to start no longer leaves the other direction
+  running with no URBs; it is stopped with an xrun.
+- At 64 kHz and above, a period shorter than the device's packet (with
+  `urb_frames_min` lowered) is no longer offered and then refused in
+  hw_params.
+- Disconnect no longer turns USB autosuspend on for the whole device,
+  MIDI interface included.
+- Each unit takes its own `index`/`id` module parameter entry.
+
+### Added
+- Probe checks that the streaming altsettings have the expected interrupt
+  endpoints before using them.
+
 ## 0.2.3 (2026-11-05)
 
 ### Fixed

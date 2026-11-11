@@ -359,6 +359,7 @@ struct snd_usb_babyface {
 	bool streaming;			/* URBs actually in flight */
 	ktime_t stream_stopped;		/* when the last session's URBs stopped */
 	bool shutdown;
+	unsigned int slot;		/* index[]/id[] entry, see probe() */
 	atomic_t urb_err;		/* consecutive bad URBs (stops the stream) */
 	struct work_struct stream_work;
 
