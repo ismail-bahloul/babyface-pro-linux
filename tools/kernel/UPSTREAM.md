@@ -134,8 +134,11 @@ it as the record of what was actually mailed on 2026-09-02.
    LINUX-VALIDATION.md. It is now exposed as the `Instrument Ref Level`
    enum too, added 2026-09-06 — this note used to say "just isn't
    exposed as a control", which went stale that day.)
-6. **Device naming**: the module/card name is `Babyface Pro FS`
-   (the FS suffix matters — the non-FS unit has a different PID).
+6. **Device naming**: the card name is model-neutral, `Babyface Pro`
+   (`card->driver` `BabyfacePro`). The FS and the 2015 non-FS share
+   VID:PID and descriptors, so there is nothing to tell them apart at
+   probe (settled 2026-09-13, see below). This item used to say the FS
+   suffix mattered because the non-FS had a different PID; it does not.
 7. **linux-next compile test + get_maintainer.pl** — DONE 2026-08-28,
    **RE-RUN 2026-08-29 with a full in-tree object build**: shallow-cloned
    linux-next (20260828 snapshot), wired `sound/usb/babyfacepro/` into
