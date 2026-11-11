@@ -2140,7 +2140,16 @@ mirrors it into read-only `Front Panel *` ALSA controls.  Live findings:
   on the first IN press.
 - **byte3 idle base confirmed 0x40 live** (the flash values 0x41..0x60
   ride above it).
-- **OPEN — preamp byte0 readback index**: with 48V Mic1 ON, a wIdx=
+- **Preamp byte0 readback index — settled 2026-11-11** (TotalMix FX in
+  a Windows VM, unit passed through, usbmon on the host; then a debug
+  build reading both indexes around each cold-init step): TotalMix only
+  ever reads 0x17 at wIdx=0x0000, and its byte 0 follows the preamp
+  state (PAD AN1: 0x0C -> 0x1C -> 0x0C).  A read at wIdx=0x003F returns
+  byte0 = 0x00 whatever the state.  The cold init's 0x16 clears zero
+  the state (0x11 before, 0x00 after), so the driver reads it at
+  wIdx=0x0000 before the cold init and writes it back after.  The
+  earlier note follows.
+- *Earlier:* with 48V Mic1 ON, a wIdx=
   0x0000 read returns byte0 = 0x01 (raw bit) but a wIdx=0x003F read
   returns byte0 = 0x00 — and interleaving the two (p48watch) made BOTH
   read 0x00 for the whole run while the control stayed ON, then a lone

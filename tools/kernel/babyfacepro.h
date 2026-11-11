@@ -128,7 +128,9 @@
 #define BF_SETTINGS_CLOCK_OPTICAL	0x0004
 #define BF_SETTINGS_OPTICAL_SPDIF	0x0400
 
-/* Preamp state byte (0x17, wIdx 0x003F - full state, verified).
+/* Preamp state byte (0x17, wIdx 0x003F - full state, verified).  This
+ * is the write index; the state reads back at BF_REG_PANEL_READ (a read
+ * at 0x003F returns 0).
  * NOTE 2026-08-26 (cap_reflevel3.pcap): the 0x0C "base" is NOT a
  * constant - it is the Instr 3/4 REF-LEVEL bits (bits 2-3, +4dBu =
  * 0x0C set; -10dBV/Boost = clear; Boost additionally commits 0x21

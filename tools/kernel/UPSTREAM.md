@@ -133,7 +133,8 @@ it as the record of what was actually mailed on 2026-09-02.
    not gated on usage — flag this if a reviewer wants the stronger
    fix.
 5. **Open protocol items** (documented in PROTOCOL.md, not blockers):
-   the preamp readback byte0 index semantics (0x003F vs 0x0000), the
+   the preamp readback byte0 index semantics (0x003F vs 0x0000; settled
+   2026-11-11: read at 0x0000, before the cold init), the
    width strip-ownership tail (cap_width7 family), and the EQ HF warp.
    (The ref-level 3-state map was FULLY DECODED 2026-08-26 — see
    LINUX-VALIDATION.md. It is now exposed as the `Instrument Ref Level`

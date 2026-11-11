@@ -11,6 +11,10 @@
 - At 64 kHz and above, a period shorter than the device's packet (with
   `urb_frames_min` lowered) is no longer offered and then refused in
   hw_params.
+- Probe read the 48V, PAD and ref level state at the wrong index, after
+  the cold init had cleared it, so it always found everything off and the
+  unit lost the state it keeps across power cycles. It now reads it the
+  way TotalMix does, before the cold init, and writes it back.
 - Disconnect no longer turns USB autosuspend on for the whole device,
   MIDI interface included.
 - Each unit takes its own `index`/`id` module parameter entry.

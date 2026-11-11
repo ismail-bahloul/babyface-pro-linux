@@ -1664,6 +1664,7 @@ static int babyface_probe(struct usb_interface *intf,
 	struct snd_card *card;
 	struct snd_pcm *pcm;
 	unsigned int urbsize;
+	bool preamp_read;
 	u8 st[4];
 	unsigned int slot;
 	int i, err;
@@ -1774,19 +1775,17 @@ static int babyface_probe(struct usb_interface *intf,
 		goto error;
 	}
 
-	err = bf_cold_init(chip);
-	if (err < 0) {
-		dev_err(&intf->dev, "cold init failed: %d\n", err);
-		goto error;
-	}
-
-	/* Sync the preamp state from the 0x17 readback (byte 0 mirrors
-	 * the 48V/PAD bits and the ref level; it persists across power
-	 * cycles).  Boost shares -10dBV's bits and only exists in the
+	/* Sync the preamp state from the 0x17 readback: byte 0 mirrors
+	 * the 48V/PAD bits and the ref level, and the unit keeps them
+	 * across power cycles.  Read it at wIndex 0, the index TotalMix
+	 * polls (a read at the write index, 0x003F, returns 0), and
+	 * before the cold init, whose 0x16 clears zero it; it is written
+	 * back after.  Boost shares -10dBV's bits and only exists in the
 	 * one-shot commit value, so it cannot be recovered here.
 	 */
-	err = bf_vendor_read(chip, BF_REQ_PREAMP, BF_REG_PREAMP, st);
-	if (err < 0) {
+	err = bf_vendor_read(chip, BF_REQ_PREAMP, BF_REG_PANEL_READ, st);
+	preamp_read = err >= 0;
+	if (!preamp_read) {
 		dev_dbg(&intf->dev, "preamp readback failed: %d\n", err);
 	} else {
 		chip->preamp = st[0] & (BF_PREAMP_REF_MASK |
@@ -1797,6 +1796,19 @@ static int babyface_probe(struct usb_interface *intf,
 		chip->ref_level =
 			(chip->preamp & BF_PREAMP_REF_MASK) == BF_PREAMP_REF_4DBU ?
 			BF_REF_LEVEL_4DBU : BF_REF_LEVEL_MINUS10DBV;
+	}
+
+	err = bf_cold_init(chip);
+	if (err < 0) {
+		dev_err(&intf->dev, "cold init failed: %d\n", err);
+		goto error;
+	}
+	if (preamp_read) {
+		err = bf_preamp_state_write(chip);
+		if (err < 0) {
+			dev_err(&intf->dev, "preamp restore failed: %d\n", err);
+			goto error;
+		}
 	}
 
 	bf_eq_defaults(chip);
