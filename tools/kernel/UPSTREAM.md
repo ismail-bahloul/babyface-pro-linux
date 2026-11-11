@@ -22,7 +22,7 @@ and the driver is standalone, modeled on `snd-usb-caiaq`.
     (standard + low),
   - pitch/varispeed (−5%…+5%, 16.8 fixed-point DDS quads),
   - loopback (30-channel 0x15 map), AN1>2, AN1/2 link, MS processor,
-    width, FX send, DIM (−20 dB absolute on Phones),
+    width, FX send, DIM (−20 dB from the current Phones level),
   - front-panel poll (0x17 readback → read-only ALSA controls:
     buttons, wheel, IN/OUT selection, MIX, DIM).
 - Re-probe resilience: full mixer cache restored across unbind/rebind

@@ -14,6 +14,9 @@
 - Disconnect no longer turns USB autosuspend on for the whole device,
   MIDI interface included.
 - Each unit takes its own `index`/`id` module parameter entry.
+- `Dim Switch` takes 20 dB off the Phones level instead of setting it to
+  -20 dB, which made a quieter level louder. This is what TotalMix writes,
+  checked against TotalMix FX on the unit.
 
 ### Added
 - Probe checks that the streaming altsettings have the expected interrupt

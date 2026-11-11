@@ -331,31 +331,32 @@ static int bf_master_get(struct snd_kcontrol *kctl,
 	return 0;
 }
 
-/* The master step to put on the wire.  The cache keeps the real
- * volume: mute wins, and DIM is the fixed -20 dB step on the Phones
- * pair, so every writer derives the wire value the same way.
+/* DIM takes 20 dB off the current level, as TotalMix does: with the
+ * Phones master at -10 dB it writes the -30 dB pair (0xb7 / 0x0103),
+ * at -21.8 dB the -41.8 dB pair.  It never mutes: a level within 20 dB
+ * of the bottom goes to the bottom step.
  */
+static u16 bf_dim_step(u16 step)
+{
+	return step > BF_DIM_STEPS ? step - BF_DIM_STEPS : 1;
+}
+
 /* The two master registers to put on the wire.  The cache keeps the
- * real volume: mute wins, and DIM is the exact -20 dB pair the
- * hardware's own button writes (0xcb / 0x0333, cap_dim2.pcap), not the
- * master curve's value at that step.
+ * real volume and every writer derives the wire value from it the same
+ * way: mute wins, then DIM.
  */
 static u8 bf_out_reg8(bool muted, bool dim, u16 step)
 {
 	if (muted)
 		return BF_MASTER_MUTE;
-	if (dim)
-		return BF_MASTER_MINUS20_8;
-	return bf_master_reg8(step);
+	return bf_master_reg8(dim ? bf_dim_step(step) : step);
 }
 
 static u16 bf_out_reg16(bool muted, bool dim, u16 step)
 {
 	if (muted)
 		return 0;
-	if (dim)
-		return BF_MASTER_MINUS20_16;
-	return bf_master_reg16(step);
+	return bf_master_reg16(dim ? bf_dim_step(step) : step);
 }
 
 static int bf_master_put(struct snd_kcontrol *kctl,
@@ -1732,10 +1733,12 @@ static int bf_ms_put(struct snd_kcontrol *kctl,
 	return 1;
 }
 
-/* DIM - cap_dim2.pcap: an absolute -20 dB on the Phones master
- * (out 1: 8-bit 0xCB / 16-bit 0x0333) regardless of the current level,
- * plus the 0x17 wVal=0x2000 wIdx=0x2000 flag; release restores the
- * pre-DIM master host-side.  The master cache keeps the real volume.
+/* DIM: 20 dB off the Phones master (out 1, both registers, see
+ * bf_dim_step()), plus the 0x17 wVal=0x2000 wIdx=0x2000 flag; release
+ * restores the pre-DIM master.  The master cache keeps the real volume.
+ * TotalMix dims whichever output its Main Out names; that setting lives
+ * on the host only (reassigning it writes nothing), and Phones is what
+ * it names on a Babyface Pro out of the box.
  */
 static int bf_dim_get(struct snd_kcontrol *kctl,
 		      struct snd_ctl_elem_value *ucontrol)

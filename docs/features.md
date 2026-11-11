@@ -28,7 +28,8 @@ display.
 
 DIM presses are reported through `DIM Button Press Count` for a mixer
 application to act on ([TuxMix](https://github.com/ismail-bahloul/TuxMix)
-does); the `Dim Switch` control still applies the fixed Phones dim.
+does); the `Dim Switch` control takes 20 dB off the Phones level, as TotalMix
+does with its default Main Out.
 
 ## Power management
 

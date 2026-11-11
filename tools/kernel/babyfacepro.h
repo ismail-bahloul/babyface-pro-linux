@@ -274,8 +274,8 @@
 #define BF_MASTER_8_MIN			0x73
 #define BF_MASTER_MUTE			0x3b
 #define BF_MASTER_UNMUTE		0xf3
-/* -20 dB master, 8-bit and 16-bit: the exact pair the hardware DIM
- * button writes (cap_dim2.pcap), reused as the power-on default.
+/* -20 dB master, 8-bit and 16-bit: the pair DIM writes on a 0 dB
+ * master (cap_dim2.pcap), used as the power-on default.
  */
 #define BF_MASTER_MINUS20_8		0xcb
 #define BF_MASTER_MINUS20_16		0x0333
@@ -288,6 +288,8 @@
 #define BF_MASTER_STEP_0DB		181
 #define BF_MASTER_STEP_MAX		193
 #define BF_MASTER_STEP_MINUS20		(BF_MASTER_STEP_0DB - 40)
+/* DIM's cut, in master steps: 20 dB. */
+#define BF_DIM_STEPS			40
 
 /* Crosspoint fader curve: 0 dB = 0x16a0, +6 dB = 0x2d41 (fader curve,
  * DIFFERENT from the master 0x4000 top - see CALIBRATION.md).
@@ -429,7 +431,7 @@ struct snd_usb_babyface {
 	int width;			/* width knob -100..+100 */
 	u16 fx_send;			/* FX send level 0..0x1000 */
 	u16 dim_saved[2];		/* pre-DIM Phones master (out 1 L/R) */
-	bool dim;			/* DIM engaged (fixed -20 dB on Phones) */
+	bool dim;			/* DIM engaged (-20 dB on Phones) */
 
 
 	/* front panel (babyfacepro-ctl.c) - 0x17 readback poll */

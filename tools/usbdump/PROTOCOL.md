@@ -1464,11 +1464,9 @@ BF_REG_MASTER_8 0x0006/7, BF_REG_MASTER_16 0x03e2/3):
 | DIM ON | 0xCB | 0x0333 | wVal=0x2000 |
 | DIM OFF | restore pre-DIM | restore pre-DIM | wVal=0x0000 |
 
-- **DIM = an absolute −20 dB** on the Phones master (0xF3 − 0xCB =
-  40 × 0.5 dB; 16-bit 0x0333 ≈ −20 dB), **independent of the current
-  level** — verified with pre-DIM at 0 dB (0xF3) and −40 dB (0xA3):
-  DIM always writes 0xCB/0x0333 (and would make a −40 dB monitor
-  LOUDER, so it is a fixed level, not a floor).
+- ~~DIM = an absolute −20 dB~~ — wrong, see "Settled 2026-11-11"
+  below: DIM is −20 dB from the current level.  This capture wrote
+  0xCB/0x0333 (0xF3 − 0xCB = 40 × 0.5 dB) from a 0 dB master.
 - The pre-DIM level is kept host-side and restored on DIM OFF — the
   driver needs the same two-value cache.
 - The 0x17 wVal=0x2000 wIdx=0x2000 write is the DIM flag (likely the
@@ -1478,21 +1476,34 @@ BF_REG_MASTER_8 0x0006/7, BF_REG_MASTER_16 0x03e2/3):
   now has a DIM control (added 2026-09-13), wired to exactly this
   Phones-only burst.
 
-  **OPEN QUESTION (2026-09-14, raised by David Fredman, issue #4):**
-  "Main Out" is documented above (§ front-panel semantics) as a
-  TotalMix-side setting, reassignable, and DIM is called "a
-  configurable hotkey" there — meaning this capture may just show the
-  DEFAULT Main Out (Phones), not the ONLY possible target.  We have
-  never captured a session with Main Out reassigned to a different
-  output (e.g. AN1/2) to see whether the DIM burst follows it to a
-  different master register pair, or whether "Main Out" reassignment
-  is purely a host-side UI routing concept with no corresponding
-  protocol difference.  Needed to settle this properly: a fresh
-  Windows capture — set Main Out = AN1/2 in TotalMix's settings, press
-  DIM, see which master registers change (if any).  Until then, the
-  driver keeps the one behavior actually observed on the wire
-  (Phones-only) rather than guessing at a broader scope no capture
-  supports.
+  **Settled 2026-11-11 (TotalMix FX in a Windows VM, Babyface
+  passed through, usbmon on the host).**  Two corrections to the
+  above:
+
+  - **DIM is relative, not absolute.** It takes 20 dB off the current
+    level.  Main at -10 dB: DIM writes 0xB7 / 0x0103 (-30 dB).  Main
+    at -21.8 dB (0xC7 / 0x029B): DIM writes 0x9F / 0x0042 (-41.8 dB).
+    Main at 0 dB gives the 0xCB / 0x0333 pair of cap_dim2, which is
+    why that capture looked like a fixed level.  The 16-bit value is
+    0x2000 * 10^(dB/20), exact.
+  - **DIM follows TotalMix's Main Out, and Main Out exists only on
+    the host.**  Reassigning Main Out (control room, assign > Main
+    Out) writes nothing to the unit.  With Main Out = AN 1/2, DIM
+    writes the AN1/2 masters (0x1A idx 0x0004/5, 0x12 idx
+    0x03E0/1) with the same -20 dB relative cut.  A fresh install
+    has Main Out = PH 3/4.
+  - The 0x17 wVal=0x2000 wIdx=0x2000 flag is sent only when Main Out
+    is PH 3/4; with Main Out = AN 1/2, DIM on and off both write
+    wVal=0x0000.
+  - Moving the Main fader while DIM is on writes the new level as it
+    is (TotalMix shows the dimmed level on the fader), and DIM off
+    goes back to the level from before DIM, dropping the change.  The
+    Linux driver keeps the undimmed volume in the master control
+    instead, so a change under DIM is where DIM off returns.
+
+  The driver dims the Phones pair by 20 dB from its current level
+  (bf_dim_step()), which is TotalMix's behaviour with its default Main
+  Out.
 
 ### System volume — HOST-SIDE stream gain, zero USB writes (cap_sysvol2.pcap, 2026-08-26)
 
