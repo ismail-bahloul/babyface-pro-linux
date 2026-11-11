@@ -676,10 +676,10 @@ SETTINGS COMMAND WORD. Confirmed by dedicated captures:
 
 | wVal | Setting | Capture |
 |---|---|---|
-| 0x0001 | default (ADAT optical, EQ-record off, clock Internal) | all |
+| 0x0001 | default (ADAT optical, EQ for Record on, clock Internal) | all |
 | 0x0004 | clock source = Optical (device: 0x17 byte 2 = 0x80, no lock) | cap_clk |
 | 0x0401 | Optical Out = SPDIF (0x0001 = ADAT) | cap_opt |
-| 0x0041 | EQ for Record = ON (0x0001 = off) | cap_eqr |
+| 0x0041 | EQ for Record = OFF (0x0001 = on) | TotalMix VM, 2026-11-11 |
 
 Bit map: bit 2 = clock Optical, bit 6 = EQ for Record, bit 10 = SPDIF
 out. The device reacts to these bits (clock: 0x80 no-lock readback).
@@ -689,17 +689,15 @@ flag word (EXCEPT pitch, which writes the 0x1B DDS quads, and the full
 state uploads the app does on open/OK, which are host-side re-syncs
 and not needed to change a setting).
 
-> **Disputed (reported in #31, 2026-10-26; not yet checked on the FS).**
-> Captures of RME's driver 1.277 and TotalMix FX 1.991 on a Babyface Pro
-> rev 6 (firmware 211) read this word differently. Bit 6 set means EQ for
-> Record **off**: `0x0041` came with the Settings dialog's checkbox cleared,
-> `0x0001` with it ticked, as installed, the opposite of the table above.
-> TMS writes no bit. And the word is not a keepalive: RME's driver writes it
-> when the Settings dialog opens and after each change in it, never at
-> intervals, and none of 42 captures taken without the dialog holds it, those
-> with audio streaming included. The `0x0441` of a rate change would then be
-> Optical Out SPDIF with EQ for Record off. To settle it: set a strong EQ on
-> an input and compare a capture with the bit set and with it clear.
+> **Settled 2026-11-11, against RME's driver on the FS.** Bit 6 set means
+> EQ for Record **off**: `0x0041` is written when the Settings dialog's
+> checkbox is cleared, `0x0001` when it is ticked (the installed default);
+> the rows above had it the other way round, as reported in #31.
+> The word is written on each change in the dialog (Optical Out SPDIF
+> `0x0401`, clock Optical `0x0004` with bit 0 clear, and back to
+> `0x0001`), and TMS writes nothing new (`0x0001` both ways). The driver
+> composes the same words (`0x0041`, `0x0441`, `0x0444`), checked with
+> usbmon.
 
 ### Pitch / varispeed — the 0x1B quad is 24-bit fixed point (cap_pitch.pcap, 2026-08-23, FULL SWEEP DECODED)
 

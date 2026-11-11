@@ -119,14 +119,17 @@
  * state register", hardware-verified 2026-08-22/23): clock source is
  * NOT a register write at all, only this flag word changes.  Bit 2 =
  * clock Optical (bit clear = Internal, the default); bit 10 = Optical-Out
- * S/PDIF (bit clear = ADAT, the default).  Bit 6 (EQ for Record) is next
- * in the driver's own upstream follow-up list, not wired to a control
- * yet - the composer below OR's in every tracked bit, structured so that
- * one can be added the same way without another flag-stomping rewrite.
+ * S/PDIF (bit clear = ADAT, the default); bit 6 = EQ for Record turned
+ * off (bit clear = on, the default).  bf_settings_word() OR's in every
+ * tracked bit.
  */
 #define BF_SETTINGS_CLOCK_INTERNAL	0x0001
 #define BF_SETTINGS_CLOCK_OPTICAL	0x0004
 #define BF_SETTINGS_OPTICAL_SPDIF	0x0400
+/* "EQ for Record" in the Windows settings dialog: bit 6 is set when the
+ * box is cleared (TotalMix FX, 2026-11-11: cleared 0x0041, set 0x0001).
+ */
+#define BF_SETTINGS_EQ_NOT_RECORDED	0x0040
 
 /* Preamp state byte (0x17, wIdx 0x003F - full state, verified).  This
  * is the write index; the state reads back at BF_REG_PANEL_READ (a read
@@ -441,6 +444,7 @@ struct snd_usb_babyface {
 	bool ms_proc;			/* MS processor engaged */
 	bool clock_optical;		/* clock source: false = Internal (default) */
 	bool optical_spdif;		/* Optical Out: false = ADAT (default) */
+	bool eq_not_recorded;		/* EQ for Record off (default: on) */
 	s8 xwidth[14];			/* stereo sources' width, -100..100 */
 	u16 fx_send;			/* FX send level 0..0x1000 */
 	u16 dim_saved[2];		/* pre-DIM Phones master (out 1 L/R) */
@@ -531,6 +535,7 @@ const struct bf_rate *bf_rate_lookup(unsigned int rate);
 unsigned int bf_rate_family(const struct bf_rate *r);
 int bf_vendor_write(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx);
 int bf_vendor_read(struct snd_usb_babyface *chip, u8 req, u16 idx, u8 *buf);
+u16 bf_settings_word(struct snd_usb_babyface *chip);
 int bf_settings_write(struct snd_usb_babyface *chip);
 int bf_clock_write(struct snd_usb_babyface *chip);
 int bf_pitch_write(struct snd_usb_babyface *chip, int pitch);

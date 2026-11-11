@@ -108,19 +108,24 @@ int bf_vendor_read(struct snd_usb_babyface *chip, u8 req, u16 idx, u8 *buf)
  * are tracked today; the single call site this replaces (which used to
  * hardcode 0x0001, i.e. "always Internal") is why this exists as its own
  * function rather than an inline write at each call site - the next
- * flag added to this word (EQ for Record, this driver's own upstream
- * follow-up list) just OR's in here too, instead of every caller needing
- * to remember every other bit.
+ * flag added to this word just OR's in bf_settings_word(), instead of
+ * every caller needing to remember every other bit.
  */
-int bf_settings_write(struct snd_usb_babyface *chip)
+u16 bf_settings_word(struct snd_usb_babyface *chip)
 {
 	u16 w = chip->clock_optical ? BF_SETTINGS_CLOCK_OPTICAL :
 				       BF_SETTINGS_CLOCK_INTERNAL;
 
 	if (chip->optical_spdif)
 		w |= BF_SETTINGS_OPTICAL_SPDIF;
+	if (chip->eq_not_recorded)
+		w |= BF_SETTINGS_EQ_NOT_RECORDED;
+	return w;
+}
 
-	return bf_vendor_write(chip, BF_REQ_KEEPALIVE, w,
+int bf_settings_write(struct snd_usb_babyface *chip)
+{
+	return bf_vendor_write(chip, BF_REQ_KEEPALIVE, bf_settings_word(chip),
 			       BF_REG_KEEPALIVE_SETTINGS);
 }
 
@@ -239,11 +244,7 @@ int bf_cold_init(struct snd_usb_babyface *chip)
 	r = bf_rate_lookup(chip->rate);
 	if (!r)
 		return -EINVAL;
-	w = (bf_rate_family(r) << 4) |
-	    (chip->clock_optical ? BF_SETTINGS_CLOCK_OPTICAL :
-				   BF_SETTINGS_CLOCK_INTERNAL);
-	if (chip->optical_spdif)
-		w |= BF_SETTINGS_OPTICAL_SPDIF;
+	w = (bf_rate_family(r) << 4) | bf_settings_word(chip);
 	ret = bf_vendor_write(chip, BF_REQ_KEEPALIVE, w,
 			      BF_REG_KEEPALIVE_INIT);
 	if (ret < 0)

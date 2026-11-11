@@ -42,6 +42,9 @@
   two outputs, over the levels set there.
 
 ### Added
+- `EQ for Record Switch`, the Windows settings dialog's "EQ for Record"
+  box (bit 6 of the settings word, set when it is cleared; on by
+  default). The words match RME's driver, checked with usbmon.
 - Probe checks that the streaming altsettings have the expected interrupt
   endpoints before using them.
 

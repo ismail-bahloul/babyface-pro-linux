@@ -1712,6 +1712,38 @@ static int bf_optical_put(struct snd_kcontrol *kctl,
 	return 1;
 }
 
+/* EQ for Record: whether the strips' EQ also acts on the capture path
+ * (the Windows settings dialog's box, on by default).  Bit 6 of the
+ * settings word, set when the box is cleared.
+ */
+static int bf_eq_record_get(struct snd_kcontrol *kctl,
+			    struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = !chip->eq_not_recorded;
+	return 0;
+}
+
+static int bf_eq_record_put(struct snd_kcontrol *kctl,
+			    struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	bool not_recorded = !ucontrol->value.integer.value[0];
+	int ret;
+
+	guard(mutex)(&chip->mutex);
+	if (not_recorded == chip->eq_not_recorded)
+		return 0;
+	chip->eq_not_recorded = not_recorded;
+	ret = bf_settings_write(chip);
+	if (ret < 0) {
+		chip->eq_not_recorded = !not_recorded;
+		return ret;
+	}
+	return 1;
+}
+
 static int bf_link_get(struct snd_kcontrol *kctl,
 		       struct snd_ctl_elem_value *ucontrol)
 {
@@ -2072,6 +2104,17 @@ int babyface_create_flags(struct snd_usb_babyface *chip)
 		.info = bf_optical_info,
 		.get = bf_optical_get,
 		.put = bf_optical_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "EQ for Record Switch",
+		.info = bf_switch_info,
+		.get = bf_eq_record_get,
+		.put = bf_eq_record_put,
 	}, chip);
 	err = snd_ctl_add(chip->card, kctl);
 	if (err < 0)
