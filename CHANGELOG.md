@@ -15,6 +15,13 @@
   the cold init had cleared it, so it always found everything off and the
   unit lost the state it keeps across power cycles. It now reads it the
   way TotalMix does, before the cold init, and writes it back.
+- A high shelf in the EQ was stored with the sign of its a1 coefficient
+  wrong, so it did not shelve: +3 dB at 5 kHz came out about 17 dB low
+  across the band. The bell and the low shelf were right.
+- The EQ strip's shared output gain is the product of its bands' gains, as
+  TotalMix writes it, not the last band's: with more than one band on, the
+  level of the whole strip was off by the other bands' gain (0.2 dB for two
+  bands at +3 dB, more with larger gains).
 - Disconnect no longer turns USB autosuspend on for the whole device,
   MIDI interface included.
 - Each unit takes its own `index`/`id` module parameter entry.

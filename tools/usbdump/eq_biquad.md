@@ -79,6 +79,32 @@ numerator/denominator normalized by the *other* scale.
 c0..c4 are signed 32-bit, value = word / 2²⁷ (NOT /2³¹ — the ×16 factor
 that confused earlier fits is the 2³¹/2²⁷ scale).
 
+## Settled 2026-11-11, against TotalMix FX
+
+TotalMix FX in a Windows VM with the unit passed through, usbmon on the
+host (48 kHz; low shelf 80 Hz, bell 1 kHz, high shelf 5 kHz, Q 1.0, +3 dB,
+and a high shelf at -3 dB). The bell and the low shelf were right; two
+things were not.
+
+- **The high shelf's a1 is `+2 * ((A - 1) - (A + 1) cos w0)`,** the
+  cookbook's. The code and the notes below had the opposite sign, so every
+  high shelf was stored with a1 mirrored: a +3 dB shelf at 5 kHz came out
+  about 17 dB low across the band. TotalMix wrote c0 = 0xf6f61e27 where the
+  code wrote 0x0909e1dc, and the cookbook gives 0xf6f61e27. The selftest's
+  reference had the same sign, which is why it never saw it; it now also
+  checks that a low shelf takes its gain at DC and a high shelf at Nyquist.
+- **The shared word (offset 0x34) is the product of the bands' b0/a0,** not
+  the last band's. Three biquads normalised to b0 = 1 run in cascade and
+  their levels go into one gain. With all three bands at +3 dB TotalMix
+  wrote 0x0ac86021: the product is 0x0ac8602b, the high shelf alone is
+  0x0a8bc586. With the bell at +3 and the high shelf at -3 it wrote
+  0x063301c2 against a product of 0x063301c3. A band that is off counts as
+  1.0. The 2026-08-24 reading, "it follows the last band written", came
+  from captures where the other band's b0/a0 was close to 1.
+
+The words agree with a double-precision cookbook to a few LSB of 2^-27,
+which is TotalMix's own single-precision rounding.
+
 ## Still open (small)
 
 1. **Frequency warping at high freq — RESOLVED 2026-10-26: α = sin(w0 /

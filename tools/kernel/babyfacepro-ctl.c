@@ -3470,6 +3470,16 @@ static s64 bf_exp2(s64 u)
 	return n >= 0 ? e << n : e >> -n;
 }
 
+/* The strip's shared output gain, c4, is the product of its bands' b0/a0:
+ * the three biquads are normalised to b0 = 1 and run in cascade, so the
+ * levels they take out go into one gain.  acc and band_c4 are Q27, a band
+ * that is off has 1.0 (BF_EQ_Q27) and leaves acc alone.
+ */
+static s32 bf_eq_cascade(s32 acc, s32 band_c4)
+{
+	return (s32)(((s64)acc * band_c4 + (1 << 26)) >> 27);
+}
+
 /* The 5 stored words (c0..c3 + shared c4) for one band.
  * type: 1 bell, 2 low shelf, 3 high shelf.  freq_hz, fs in Hz;
  * q100 = Q x 100; gain_x10 = dB x 10.  fs is the stream rate.
@@ -3571,7 +3581,7 @@ void bf_eq_band_words(s32 *w, int type, s32 freq_hz, s32 q100,
 			b1 = (-2 * A * (am1 + cp1) + (1 << 26)) >> 27;
 			b2 = (A * (ap1 + cp0 - ab) + (1 << 26)) >> 27;
 			a0 = ap1 - cp0 + ab;
-			a1 = -2 * (am1 - cp1);
+			a1 = 2 * (am1 - cp1);
 			a2 = ap1 - cp0 - ab;
 		}
 	}
@@ -3698,7 +3708,7 @@ static int bf_eq_update_strip(struct snd_usb_babyface *chip, int strip)
 {
 	struct bf_eq_channel *e = &chip->eq[strip];
 	s32 fs = chip->rate ? chip->rate : 48000;
-	s32 last_c4 = BF_EQ_Q27;
+	s32 shared = BF_EQ_Q27;
 	int band, i;
 
 	lockdep_assert_held(&chip->mutex);
@@ -3710,10 +3720,9 @@ static int bf_eq_update_strip(struct snd_usb_babyface *chip, int strip)
 				 e->band_q[band], e->band_gain[band], fs);
 		for (i = 0; i < 4; i++)
 			e->words[band][i] = w[i];
-		if (e->band_type[band] && e->band_gain[band])
-			last_c4 = w[4];	/* shared scale: the last band */
+		shared = bf_eq_cascade(shared, w[4]);
 	}
-	e->shared = last_c4;
+	e->shared = shared;
 	e->lc_raw = bf_eq_lc_freq_raw(e->lc_hz, e->slope_db);
 	e->slope = bf_eq_lc_slope_byte(e->slope_db);
 	return bf_eq_write_strip(chip, strip);
