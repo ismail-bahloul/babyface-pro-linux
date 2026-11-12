@@ -338,27 +338,30 @@ static int bf_master_get(struct snd_kcontrol *kctl,
  * at -21.8 dB the -41.8 dB pair.  It never mutes: a level within 20 dB
  * of the bottom goes to the bottom step.
  */
-static u16 bf_dim_step(u16 step)
+static u16 bf_dim_step(u16 step, u16 cut)
 {
-	return step > BF_DIM_STEPS ? step - BF_DIM_STEPS : 1;
+	return step > cut ? step - cut : 1;
 }
 
 /* The two master registers to put on the wire.  The cache keeps the
  * real volume and every writer derives the wire value from it the same
  * way: mute wins, then DIM.
  */
-static u8 bf_out_reg8(bool muted, bool dim, u16 step)
+/* dim is DIM's cut in master steps (BF_DIM_STEPS = 20 dB by default),
+ * 0 when DIM is off.
+ */
+static u8 bf_out_reg8(bool muted, u16 dim, u16 step)
 {
 	if (muted)
 		return BF_MASTER_MUTE;
-	return bf_master_reg8(dim ? bf_dim_step(step) : step);
+	return bf_master_reg8(dim ? bf_dim_step(step, dim) : step);
 }
 
-static u16 bf_out_reg16(bool muted, bool dim, u16 step)
+static u16 bf_out_reg16(bool muted, u16 dim, u16 step)
 {
 	if (muted)
 		return 0;
-	return bf_master_reg16(dim ? bf_dim_step(step) : step);
+	return bf_master_reg16(dim ? bf_dim_step(step, dim) : step);
 }
 
 static int bf_master_put(struct snd_kcontrol *kctl,
@@ -368,8 +371,8 @@ static int bf_master_put(struct snd_kcontrol *kctl,
 	int out = bf_master_out[kctl->private_value];
 	long nl = ucontrol->value.integer.value[0];
 	long nr = ucontrol->value.integer.value[1];
-	bool muted, dim;
-	u16 l, r, flag;
+	bool muted;
+	u16 dim, l, r, flag;
 	int ret = 0;
 
 	/* Reject anything outside the declared range, so the registers and
@@ -388,7 +391,7 @@ static int bf_master_put(struct snd_kcontrol *kctl,
 		return 0;
 
 	muted = chip->muted[out];
-	dim = out == 1 && chip->dim;
+	dim = (out == 1 && chip->dim) ? chip->dim_steps : 0;
 	flag = bf_flag_cycle[chip->flag_cnt];
 	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 
@@ -455,7 +458,7 @@ static int bf_mute_put(struct snd_kcontrol *kctl,
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
 	int out = bf_master_out[kctl->private_value];
 	bool muted = !ucontrol->value.integer.value[0];
-	bool dim;
+	u16 dim;
 	u16 flag;
 	int ret = 0;
 
@@ -463,7 +466,7 @@ static int bf_mute_put(struct snd_kcontrol *kctl,
 	if (muted == chip->muted[out])
 		return 0;
 
-	dim = out == 1 && chip->dim;
+	dim = (out == 1 && chip->dim) ? chip->dim_steps : 0;
 	flag = bf_flag_cycle[chip->flag_cnt];
 	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 
@@ -573,7 +576,7 @@ int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
 	 * own channel and (1 - w) / 2 from the other one.  At +1.00 the
 	 * cross terms are 0.  In the order TotalMix sends them.
 	 */
-	w = chip->xwidth[src];
+	w = (chip->main_mono && out == BF_OUT_MAIN) ? 0 : chip->xwidth[src];
 	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(l, w),
 			      (base_l + s->idx_l) | flag);
 	if (ret < 0)
@@ -1871,22 +1874,22 @@ int bf_dim_apply(struct snd_usb_babyface *chip, bool on)
 	flag = bf_flag_cycle[chip->flag_cnt];
 	chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 	ret = bf_vendor_write(chip, BF_REQ_GAIN,
-			      bf_out_reg8(muted, on, step_l),
+			      bf_out_reg8(muted, on ? chip->dim_steps : 0, step_l),
 			      BF_REG_MASTER_8 + 2 * 1);
 	if (ret < 0)
 		goto out;
 	ret = bf_vendor_write(chip, BF_REQ_GAIN,
-			      bf_out_reg8(muted, on, step_r),
+			      bf_out_reg8(muted, on ? chip->dim_steps : 0, step_r),
 			      BF_REG_MASTER_8 + 2 * 1 + 1);
 	if (ret < 0)
 		goto out;
 	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-			      bf_out_reg16(muted, on, step_l),
+			      bf_out_reg16(muted, on ? chip->dim_steps : 0, step_l),
 			      (BF_REG_MASTER_16 + 2 * 1) | flag);
 	if (ret < 0)
 		goto out;
 	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
-			      bf_out_reg16(muted, on, step_r),
+			      bf_out_reg16(muted, on ? chip->dim_steps : 0, step_r),
 			      (BF_REG_MASTER_16 + 2 * 1 + 1) | flag);
 	if (ret < 0)
 		goto out;
@@ -1914,6 +1917,97 @@ static int bf_dim_put(struct snd_kcontrol *kctl,
 	if (ret == 0)
 		ret = 1;
 	return ret;
+}
+
+/* Dim Level: how much DIM takes off, in dB (TotalMix FX's Mixer Settings,
+ * "Main Out Dim", -20 dB by default).  The cut is kept in master steps
+ * (two per dB); changing it with DIM engaged re-writes the Phones master.
+ */
+static int bf_dim_level_info(struct snd_kcontrol *kctl,
+			     struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = BF_DIM_LEVEL_MAX_DB;
+	uinfo->value.integer.step = 1;
+	return 0;
+}
+
+static int bf_dim_level_get(struct snd_kcontrol *kctl,
+			    struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->dim_steps / 2;
+	return 0;
+}
+
+static int bf_dim_level_put(struct snd_kcontrol *kctl,
+			    struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	long db = ucontrol->value.integer.value[0];
+	u16 old;
+	int ret = 0;
+
+	if (db < 0 || db > BF_DIM_LEVEL_MAX_DB)
+		return -EINVAL;
+
+	guard(mutex)(&chip->mutex);
+	if (db * 2 == chip->dim_steps)
+		return 0;
+	old = chip->dim_steps;
+	chip->dim_steps = db * 2;
+	if (chip->dim) {
+		ret = bf_dim_apply(chip, true);
+		if (ret < 0) {
+			chip->dim_steps = old;
+			return ret;
+		}
+	}
+	return 1;
+}
+
+/* Main Mono: TotalMix FX's mono button on the control room.  It sums the
+ * stereo sources into the Main pair (PH3/4) by taking their width to 0
+ * for that output only: each source's own width (see below) stays what
+ * it is for every other output.  Measured: switching it on writes the
+ * Main crosspoints of PB3 and PB4 at 0x1000 on both sides, off writes
+ * 0x2000 / 0 back.  See bf_xpoint_write().
+ */
+static int bf_main_mono_get(struct snd_kcontrol *kctl,
+			    struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->main_mono;
+	return 0;
+}
+
+static int bf_main_mono_put(struct snd_kcontrol *kctl,
+			    struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	bool on = ucontrol->value.integer.value[0];
+	bool old;
+	int src, ret;
+
+	guard(mutex)(&chip->mutex);
+	if (on == chip->main_mono)
+		return 0;
+	old = chip->main_mono;
+	chip->main_mono = on;
+	for (src = BF_SRC_STEREO; src < 14; src++) {
+		ret = bf_xpoint_write(chip, BF_OUT_MAIN, src,
+				      chip->xpoint[BF_OUT_MAIN][src][0],
+				      chip->xpoint[BF_OUT_MAIN][src][1]);
+		if (ret < 0) {
+			chip->main_mono = old;
+			return ret;
+		}
+	}
+	return 1;
 }
 
 /* Width of a stereo source (TotalMix FX's width knob, -1.00..+1.00 in
@@ -2012,7 +2106,7 @@ static int bf_fx_send_get(struct snd_kcontrol *kctl,
 {
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
 
-	ucontrol->value.integer.value[0] = chip->fx_send;
+	ucontrol->value.integer.value[0] = chip->fxs[0];
 	return 0;
 }
 
@@ -2032,16 +2126,204 @@ static int bf_fx_send_put(struct snd_kcontrol *kctl,
 	v = nv;
 
 	guard(mutex)(&chip->mutex);
-	if (v == chip->fx_send)
+	if (v == chip->fxs[0])
 		return 0;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, v, 0x0138);
+	ret = bf_xpoint_write(chip, BF_OUT_FX, 0, v, v);
 	if (ret < 0)
 		return ret;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, v, 0x0153);
-	if (ret < 0)
-		return ret;
-	chip->fx_send = v;
+	chip->fxs[0] = v;
 	return 1;
+}
+
+/* FX send, per source: TotalMix FX's "send FX" knob of every input and
+ * playback strip.  It is the source's crosspoint into the FX bus, the block
+ * after the six outputs (0x0138 on), with the same level on both sides:
+ * the AN 1/2 playback strip writes PB1 at 0x0144 / 0x015f.  0 dB is
+ * 0x1000 and the level is linear in amplitude (-1.5 dB 0x0d76, -5.5 dB
+ * 0x087e, -61.5 dB 0x0003).  "FX Send Volume" above is the AN1 one.
+ */
+static int bf_fxs_info(struct snd_kcontrol *kctl,
+		       struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = BF_FX_SEND_TOP;
+	uinfo->value.integer.step = 1;
+	return 0;
+}
+
+static int bf_fxs_get(struct snd_kcontrol *kctl,
+		      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->fxs[kctl->private_value];
+	return 0;
+}
+
+static int bf_fxs_put(struct snd_kcontrol *kctl,
+		      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	int src = kctl->private_value;
+	long nv = ucontrol->value.integer.value[0];
+	int ret;
+
+	if (nv < 0 || nv > BF_FX_SEND_TOP)
+		return -EINVAL;
+
+	guard(mutex)(&chip->mutex);
+	if (nv == chip->fxs[src])
+		return 0;
+	ret = bf_xpoint_write(chip, BF_OUT_FX, src, nv, nv);
+	if (ret < 0)
+		return ret;
+	chip->fxs[src] = nv;
+	return 1;
+}
+
+/* FX return, per output: the "return FX" knob of an output strip.  The
+ * return is a stereo source (FX L / FX R, idx 24 and 25) on every output's
+ * block; at plain stereo TotalMix FX writes FX L into the left side and FX R
+ * into the right one, with the same level.  0 dB is 0x4000, the +6 dB of the
+ * mixer's scale (-50 dB 0x0033, -43 dB 0x0074).  Main Mono sums it like any
+ * stereo source: all four registers, at half level.
+ */
+static int bf_fxr_write(struct snd_usb_babyface *chip, int out, u16 v)
+{
+	u16 base_l = BF_REG_XPOINT_BASE_L + BF_REG_XPOINT_STRIDE * out;
+	u16 base_r = BF_REG_XPOINT_BASE_R + BF_REG_XPOINT_STRIDE * out;
+	u16 flag = 0;
+	int w = (chip->main_mono && out == BF_OUT_MAIN) ? 0 : BF_WIDTH_STEREO;
+	int ret;
+
+	if (out) {
+		flag = bf_flag_cycle[chip->flag_cnt];
+		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
+	}
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(v, w),
+			      (base_l + BF_FXR_IDX_L) | flag);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(v, -w),
+			      (base_l + BF_FXR_IDX_R) | flag);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(v, -w),
+			      (base_r + BF_FXR_IDX_L) | flag);
+	if (ret < 0)
+		return ret;
+	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(v, w),
+			       (base_r + BF_FXR_IDX_R) | flag);
+}
+
+static int bf_fxr_info(struct snd_kcontrol *kctl,
+		       struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = BF_FX_RETURN_TOP;
+	uinfo->value.integer.step = 1;
+	return 0;
+}
+
+static int bf_fxr_get(struct snd_kcontrol *kctl,
+		      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->fxr[kctl->private_value];
+	return 0;
+}
+
+static int bf_fxr_put(struct snd_kcontrol *kctl,
+		      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	int out = kctl->private_value;
+	long nv = ucontrol->value.integer.value[0];
+	int ret;
+
+	if (nv < 0 || nv > BF_FX_RETURN_TOP)
+		return -EINVAL;
+
+	guard(mutex)(&chip->mutex);
+	if (nv == chip->fxr[out])
+		return 0;
+	ret = bf_fxr_write(chip, out, nv);
+	if (ret < 0)
+		return ret;
+	chip->fxr[out] = nv;
+	return 1;
+}
+
+/* Write every FX level back, after a reset or a resume.  chip->mutex held. */
+int bf_fx_restore(struct snd_usb_babyface *chip)
+{
+	int i, ret;
+
+	for (i = 0; i < 14; i++) {
+		ret = bf_xpoint_write(chip, BF_OUT_FX, i, chip->fxs[i],
+				      chip->fxs[i]);
+		if (ret < 0)
+			return ret;
+	}
+	for (i = 0; i < 6; i++) {
+		ret = bf_fxr_write(chip, i, chip->fxr[i]);
+		if (ret < 0)
+			return ret;
+	}
+	return 0;
+}
+
+int babyface_create_fx_levels(struct snd_usb_babyface *chip)
+{
+	static const char * const out_names[6] = {
+		"AN1/2", "PH3/4", "AS1/2", "ADAT3/4", "ADAT5/6", "ADAT7/8"
+	};
+	struct snd_kcontrol *kctl;
+	char name[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];
+	int i, err;
+
+	for (i = 0; i < 14; i++) {
+		kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+			.name = "FX Send",
+			.info = bf_fxs_info,
+			.get = bf_fxs_get,
+			.put = bf_fxs_put,
+			.private_value = i,
+		}, chip);
+		if (!kctl)
+			return -ENOMEM;
+		/* "AN1 FX Send", "PB1 FX Send"... */
+		scnprintf(name, sizeof(name), "%s FX Send", bf_sources[i].name);
+		strscpy(kctl->id.name, name, sizeof(kctl->id.name));
+		err = snd_ctl_add(chip->card, kctl);
+		if (err < 0)
+			return err;
+	}
+	for (i = 0; i < 6; i++) {
+		kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+			.name = "FX Return",
+			.info = bf_fxr_info,
+			.get = bf_fxr_get,
+			.put = bf_fxr_put,
+			.private_value = i,
+		}, chip);
+		if (!kctl)
+			return -ENOMEM;
+		/* "AN1/2 FX Return", "PH3/4 FX Return"... */
+		scnprintf(name, sizeof(name), "%s FX Return", out_names[i]);
+		strscpy(kctl->id.name, name, sizeof(kctl->id.name));
+		err = snd_ctl_add(chip->card, kctl);
+		if (err < 0)
+			return err;
+	}
+	return 0;
 }
 
 int babyface_create_flags(struct snd_usb_babyface *chip)
@@ -2148,6 +2430,28 @@ int babyface_create_flags(struct snd_usb_babyface *chip)
 		.info = bf_switch_info,
 		.get = bf_dim_get,
 		.put = bf_dim_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "Dim Level",
+		.info = bf_dim_level_info,
+		.get = bf_dim_level_get,
+		.put = bf_dim_level_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "Main Mono Switch",
+		.info = bf_switch_info,
+		.get = bf_main_mono_get,
+		.put = bf_main_mono_put,
 	}, chip);
 	err = snd_ctl_add(chip->card, kctl);
 	if (err < 0)
@@ -2451,7 +2755,7 @@ static void bf_panel_write_master(struct snd_usb_babyface *chip, int out,
 				  u16 l, u16 r)
 {
 	bool muted = chip->muted[out];
-	bool dim = out == 1 && chip->dim;
+	u16 dim = (out == 1 && chip->dim) ? chip->dim_steps : 0;
 	u16 flag;
 
 	flag = bf_flag_cycle[chip->flag_cnt];
@@ -2500,7 +2804,7 @@ static void bf_panel_out_wheel_write(struct snd_usb_babyface *chip, int out,
 				     u16 l, u16 r)
 {
 	bool muted = chip->muted[out];
-	bool dim = out == 1 && chip->dim;
+	u16 dim = (out == 1 && chip->dim) ? chip->dim_steps : 0;
 	u16 flag;
 
 	flag = bf_flag_cycle[chip->flag_cnt];
@@ -2698,7 +3002,7 @@ static void bf_panel_out_resync(struct snd_usb_babyface *chip)
 			return;
 	}
 	if (!chip->muted[out]) {
-		bool dim = out == 1 && chip->dim;
+		u16 dim = (out == 1 && chip->dim) ? chip->dim_steps : 0;
 
 		flag = bf_flag_cycle[chip->flag_cnt];
 		chip->flag_cnt = (chip->flag_cnt + 1) & 3;

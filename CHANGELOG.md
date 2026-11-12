@@ -42,6 +42,19 @@
   two outputs, over the levels set there.
 
 ### Added
+- `<source> FX Send` for each of the fourteen sources and `<output> FX
+  Return` for each output pair, TotalMix FX's per-strip "send FX" and
+  "return FX" knobs. A send is the source's crosspoint into the FX bus
+  (0 dB = 0x1000), a return a stereo source on the output's block
+  (0 dB = 0x4000). The words match TotalMix, checked with usbmon on the
+  unit. `FX Send Volume` stays, as the AN1 send.
+- `Main Mono Switch`, the control room's mono button: the stereo sources
+  are summed into the Main pair (PH3/4) by taking their width to 0 for that
+  output only. Switching it on writes the Main crosspoints of a playback
+  pair at half level on both sides, as TotalMix does; checked on the unit.
+- `Dim Level`, how many dB `Dim Switch` takes off (0 to 65, 20 by default),
+  the "Main Out Dim" of TotalMix FX's Mixer Settings. With -9 dB and the
+  Phones at -10 dB the unit gets the same 8-bit value as from TotalMix.
 - `EQ for Record Switch`, the Windows settings dialog's "EQ for Record"
   box (bit 6 of the settings word, set when it is cleared; on by
   default). The words match RME's driver, checked with usbmon.

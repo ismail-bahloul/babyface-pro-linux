@@ -385,10 +385,7 @@ int bf_state_apply_flags(struct snd_usb_babyface *chip)
 	if (ret < 0)
 		return ret;
 
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, chip->fx_send, 0x0138);
-	if (ret < 0)
-		return ret;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, chip->fx_send, 0x0153);
+	ret = bf_fx_restore(chip);
 	if (ret < 0)
 		return ret;
 
@@ -1719,6 +1716,7 @@ static int babyface_probe(struct usb_interface *intf,
 	chip->alt = BF_ALT_1;
 	chip->frame_bytes = 56;
 	chip->preamp = BF_PREAMP_BASE;
+	chip->dim_steps = BF_DIM_STEPS;
 	memset(chip->panel_sel, -1, sizeof(chip->panel_sel));
 	chip->panel_poll_ms = clamp(panel_poll_ms, 10, 1000);
 	mutex_init(&chip->mutex);
@@ -1882,6 +1880,12 @@ static int babyface_probe(struct usb_interface *intf,
 	err = babyface_create_xpoints(chip);
 	if (err < 0) {
 		dev_err(&intf->dev, "crosspoint creation failed: %d\n", err);
+		goto error;
+	}
+
+	err = babyface_create_fx_levels(chip);
+	if (err < 0) {
+		dev_err(&intf->dev, "FX level creation failed: %d\n", err);
 		goto error;
 	}
 
