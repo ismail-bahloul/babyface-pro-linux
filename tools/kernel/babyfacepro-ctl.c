@@ -2106,7 +2106,7 @@ static int bf_fx_send_get(struct snd_kcontrol *kctl,
 {
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
 
-	ucontrol->value.integer.value[0] = chip->fx_send;
+	ucontrol->value.integer.value[0] = chip->fxs[0];
 	return 0;
 }
 
@@ -2126,16 +2126,204 @@ static int bf_fx_send_put(struct snd_kcontrol *kctl,
 	v = nv;
 
 	guard(mutex)(&chip->mutex);
-	if (v == chip->fx_send)
+	if (v == chip->fxs[0])
 		return 0;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, v, 0x0138);
+	ret = bf_xpoint_write(chip, BF_OUT_FX, 0, v, v);
 	if (ret < 0)
 		return ret;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, v, 0x0153);
-	if (ret < 0)
-		return ret;
-	chip->fx_send = v;
+	chip->fxs[0] = v;
 	return 1;
+}
+
+/* FX send, per source: TotalMix FX's "send FX" knob of every input and
+ * playback strip.  It is the source's crosspoint into the FX bus, the block
+ * after the six outputs (0x0138 on), with the same level on both sides:
+ * the AN 1/2 playback strip writes PB1 at 0x0144 / 0x015f.  0 dB is
+ * 0x1000 and the level is linear in amplitude (-1.5 dB 0x0d76, -5.5 dB
+ * 0x087e, -61.5 dB 0x0003).  "FX Send Volume" above is the AN1 one.
+ */
+static int bf_fxs_info(struct snd_kcontrol *kctl,
+		       struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = BF_FX_SEND_TOP;
+	uinfo->value.integer.step = 1;
+	return 0;
+}
+
+static int bf_fxs_get(struct snd_kcontrol *kctl,
+		      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->fxs[kctl->private_value];
+	return 0;
+}
+
+static int bf_fxs_put(struct snd_kcontrol *kctl,
+		      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	int src = kctl->private_value;
+	long nv = ucontrol->value.integer.value[0];
+	int ret;
+
+	if (nv < 0 || nv > BF_FX_SEND_TOP)
+		return -EINVAL;
+
+	guard(mutex)(&chip->mutex);
+	if (nv == chip->fxs[src])
+		return 0;
+	ret = bf_xpoint_write(chip, BF_OUT_FX, src, nv, nv);
+	if (ret < 0)
+		return ret;
+	chip->fxs[src] = nv;
+	return 1;
+}
+
+/* FX return, per output: the "return FX" knob of an output strip.  The
+ * return is a stereo source (FX L / FX R, idx 24 and 25) on every output's
+ * block; at plain stereo TotalMix FX writes FX L into the left side and FX R
+ * into the right one, with the same level.  0 dB is 0x4000, the +6 dB of the
+ * mixer's scale (-50 dB 0x0033, -43 dB 0x0074).  Main Mono sums it like any
+ * stereo source: all four registers, at half level.
+ */
+static int bf_fxr_write(struct snd_usb_babyface *chip, int out, u16 v)
+{
+	u16 base_l = BF_REG_XPOINT_BASE_L + BF_REG_XPOINT_STRIDE * out;
+	u16 base_r = BF_REG_XPOINT_BASE_R + BF_REG_XPOINT_STRIDE * out;
+	u16 flag = 0;
+	int w = (chip->main_mono && out == BF_OUT_MAIN) ? 0 : BF_WIDTH_STEREO;
+	int ret;
+
+	if (out) {
+		flag = bf_flag_cycle[chip->flag_cnt];
+		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
+	}
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(v, w),
+			      (base_l + BF_FXR_IDX_L) | flag);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(v, -w),
+			      (base_l + BF_FXR_IDX_R) | flag);
+	if (ret < 0)
+		return ret;
+	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(v, -w),
+			      (base_r + BF_FXR_IDX_L) | flag);
+	if (ret < 0)
+		return ret;
+	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(v, w),
+			       (base_r + BF_FXR_IDX_R) | flag);
+}
+
+static int bf_fxr_info(struct snd_kcontrol *kctl,
+		       struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = BF_FX_RETURN_TOP;
+	uinfo->value.integer.step = 1;
+	return 0;
+}
+
+static int bf_fxr_get(struct snd_kcontrol *kctl,
+		      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->fxr[kctl->private_value];
+	return 0;
+}
+
+static int bf_fxr_put(struct snd_kcontrol *kctl,
+		      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	int out = kctl->private_value;
+	long nv = ucontrol->value.integer.value[0];
+	int ret;
+
+	if (nv < 0 || nv > BF_FX_RETURN_TOP)
+		return -EINVAL;
+
+	guard(mutex)(&chip->mutex);
+	if (nv == chip->fxr[out])
+		return 0;
+	ret = bf_fxr_write(chip, out, nv);
+	if (ret < 0)
+		return ret;
+	chip->fxr[out] = nv;
+	return 1;
+}
+
+/* Write every FX level back, after a reset or a resume.  chip->mutex held. */
+int bf_fx_restore(struct snd_usb_babyface *chip)
+{
+	int i, ret;
+
+	for (i = 0; i < 14; i++) {
+		ret = bf_xpoint_write(chip, BF_OUT_FX, i, chip->fxs[i],
+				      chip->fxs[i]);
+		if (ret < 0)
+			return ret;
+	}
+	for (i = 0; i < 6; i++) {
+		ret = bf_fxr_write(chip, i, chip->fxr[i]);
+		if (ret < 0)
+			return ret;
+	}
+	return 0;
+}
+
+int babyface_create_fx_levels(struct snd_usb_babyface *chip)
+{
+	static const char * const out_names[6] = {
+		"AN1/2", "PH3/4", "AS1/2", "ADAT3/4", "ADAT5/6", "ADAT7/8"
+	};
+	struct snd_kcontrol *kctl;
+	char name[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];
+	int i, err;
+
+	for (i = 0; i < 14; i++) {
+		kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+			.name = "FX Send",
+			.info = bf_fxs_info,
+			.get = bf_fxs_get,
+			.put = bf_fxs_put,
+			.private_value = i,
+		}, chip);
+		if (!kctl)
+			return -ENOMEM;
+		/* "AN1 FX Send", "PB1 FX Send"... */
+		scnprintf(name, sizeof(name), "%s FX Send", bf_sources[i].name);
+		strscpy(kctl->id.name, name, sizeof(kctl->id.name));
+		err = snd_ctl_add(chip->card, kctl);
+		if (err < 0)
+			return err;
+	}
+	for (i = 0; i < 6; i++) {
+		kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+			.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+			.name = "FX Return",
+			.info = bf_fxr_info,
+			.get = bf_fxr_get,
+			.put = bf_fxr_put,
+			.private_value = i,
+		}, chip);
+		if (!kctl)
+			return -ENOMEM;
+		/* "AN1/2 FX Return", "PH3/4 FX Return"... */
+		scnprintf(name, sizeof(name), "%s FX Return", out_names[i]);
+		strscpy(kctl->id.name, name, sizeof(kctl->id.name));
+		err = snd_ctl_add(chip->card, kctl);
+		if (err < 0)
+			return err;
+	}
+	return 0;
 }
 
 int babyface_create_flags(struct snd_usb_babyface *chip)

@@ -42,6 +42,12 @@
   two outputs, over the levels set there.
 
 ### Added
+- `<source> FX Send` for each of the fourteen sources and `<output> FX
+  Return` for each output pair, TotalMix FX's per-strip "send FX" and
+  "return FX" knobs. A send is the source's crosspoint into the FX bus
+  (0 dB = 0x1000), a return a stereo source on the output's block
+  (0 dB = 0x4000). The words match TotalMix, checked with usbmon on the
+  unit. `FX Send Volume` stays, as the AN1 send.
 - `Main Mono Switch`, the control room's mono button: the stereo sources
   are summed into the Main pair (PH3/4) by taking their width to 0 for that
   output only. Switching it on writes the Main crosspoints of a playback

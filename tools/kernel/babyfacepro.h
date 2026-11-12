@@ -300,6 +300,17 @@
 #define BF_DIM_LEVEL_MAX_DB		65
 /* The output pair TotalMix FX calls Main (PH3/4). */
 #define BF_OUT_MAIN			1
+/* The block after the six outputs is the FX send bus: a source's send is
+ * its crosspoint into it, 0 dB = 0x1000 (checked against TotalMix FX).
+ */
+#define BF_OUT_FX			6
+#define BF_FX_SEND_TOP			0x1000
+/* FX return: a stereo source on every output block, at idx 24 / 25, and
+ * 0 dB = 0x4000, not the 0x2000 of the mixer.
+ */
+#define BF_FXR_IDX_L			24
+#define BF_FXR_IDX_R			25
+#define BF_FX_RETURN_TOP		0x4000
 
 /* Crosspoint fader curve of a mono source (AN1-4): 0 dB = 0x16a0,
  * +6 dB = 0x2d41, the -3 dB centre of the pan law (see CALIBRATION.md).
@@ -451,7 +462,8 @@ struct snd_usb_babyface {
 	bool optical_spdif;		/* Optical Out: false = ADAT (default) */
 	bool eq_not_recorded;		/* EQ for Record off (default: on) */
 	s8 xwidth[14];			/* stereo sources' width, -100..100 */
-	u16 fx_send;			/* FX send level 0..0x1000 */
+	u16 fxs[14];			/* FX send per source, 0..0x1000 */
+	u16 fxr[6];			/* FX return per output, 0..0x4000 */
 	u16 dim_saved[2];		/* pre-DIM Phones master (out 1 L/R) */
 	bool dim;			/* DIM engaged (-20 dB on Phones) */
 	u16 dim_steps;			/* DIM's cut in master steps (2 per dB) */
@@ -579,6 +591,8 @@ int bf_gain_max_db(int mic);
 u8 bf_gain_raw(int mic, int db);
 int bf_loopback_write_map(struct snd_usb_babyface *chip, int out, bool on);
 int bf_dim_apply(struct snd_usb_babyface *chip, bool on);
+int bf_fx_restore(struct snd_usb_babyface *chip);
+int babyface_create_fx_levels(struct snd_usb_babyface *chip);
 int babyface_create_flags(struct snd_usb_babyface *chip);
 int babyface_create_panel(struct snd_usb_babyface *chip);
 void babyface_panel_start(struct snd_usb_babyface *chip);
