@@ -78,7 +78,7 @@ int main(void)
 			{ 181, 0xcb }, { 161, 0xb7 }, { 137, 0x9f },
 		};
 		for (i = 0; i < (int)(sizeof(d8) / sizeof(d8[0])); i++) {
-			uint8_t got = bf_master_reg8(bf_dim_step(d8[i].step));
+			uint8_t got = bf_master_reg8(bf_dim_step(d8[i].step, 40));
 			if (got != d8[i].want) {
 				printf("FAIL dim step %u -> 0x%02x want 0x%02x\n",
 				       d8[i].step, got, d8[i].want);
@@ -88,11 +88,20 @@ int main(void)
 			}
 		}
 		for (i = 1; i <= 41; i++) {
-			if (bf_dim_step(i) != 1) {
+			if (bf_dim_step(i, 40) != 1) {
 				printf("FAIL dim step %d not the bottom\n", i);
 				fails++;
 			}
 		}
+	}
+	/* A different cut: Dim Level -9 dB is 18 steps, so a master at -10 dB
+	 * (step 161, 0xdf) goes to the 0xcd TotalMix wrote with that setting. */
+	if (bf_master_reg8(bf_dim_step(161, 18)) != 0xcd) {
+		printf("FAIL dim cut 18 steps -> 0x%02x want 0xcd\n",
+		       bf_master_reg8(bf_dim_step(161, 18)));
+		fails++;
+	} else {
+		printf("ok   dim cut 18 steps -> 0xcd\n");
 	}
 	printf(fails ? "== %d FAILURES ==\n" : "== ALL OK ==\n", fails);
 	return fails != 0;

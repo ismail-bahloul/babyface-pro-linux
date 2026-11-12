@@ -1719,6 +1719,7 @@ static int babyface_probe(struct usb_interface *intf,
 	chip->alt = BF_ALT_1;
 	chip->frame_bytes = 56;
 	chip->preamp = BF_PREAMP_BASE;
+	chip->dim_steps = BF_DIM_STEPS;
 	memset(chip->panel_sel, -1, sizeof(chip->panel_sel));
 	chip->panel_poll_ms = clamp(panel_poll_ms, 10, 1000);
 	mutex_init(&chip->mutex);

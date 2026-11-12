@@ -30,7 +30,9 @@ display.
 DIM presses are reported through `DIM Button Press Count` for a mixer
 application to act on ([TuxMix](https://github.com/ismail-bahloul/TuxMix)
 does); the `Dim Switch` control takes 20 dB off the Phones level, as TotalMix
-does with its default Main Out.
+does with its default Main Out. `Dim Level` sets how much (0 to 65 dB, 20 by
+default), and `Main Mono Switch` sums the stereo sources into the Main pair,
+like the mono button on TotalMix's control room.
 
 ## Power management
 

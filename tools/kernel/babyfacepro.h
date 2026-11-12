@@ -293,8 +293,13 @@
 #define BF_MASTER_STEP_0DB		181
 #define BF_MASTER_STEP_MAX		193
 #define BF_MASTER_STEP_MINUS20		(BF_MASTER_STEP_0DB - 40)
-/* DIM's cut, in master steps: 20 dB. */
+/* DIM's default cut, in master steps: 20 dB (TotalMix FX's default
+ * "Main Out Dim"); "Dim Level" changes it, up to BF_DIM_LEVEL_MAX_DB.
+ */
 #define BF_DIM_STEPS			40
+#define BF_DIM_LEVEL_MAX_DB		65
+/* The output pair TotalMix FX calls Main (PH3/4). */
+#define BF_OUT_MAIN			1
 
 /* Crosspoint fader curve of a mono source (AN1-4): 0 dB = 0x16a0,
  * +6 dB = 0x2d41, the -3 dB centre of the pan law (see CALIBRATION.md).
@@ -449,6 +454,8 @@ struct snd_usb_babyface {
 	u16 fx_send;			/* FX send level 0..0x1000 */
 	u16 dim_saved[2];		/* pre-DIM Phones master (out 1 L/R) */
 	bool dim;			/* DIM engaged (-20 dB on Phones) */
+	u16 dim_steps;			/* DIM's cut in master steps (2 per dB) */
+	bool main_mono;			/* Main Mono: stereo sources summed on Main */
 
 
 	/* front panel (babyfacepro-ctl.c) - 0x17 readback poll */
