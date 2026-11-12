@@ -119,16 +119,21 @@
  * state register", hardware-verified 2026-08-22/23): clock source is
  * NOT a register write at all, only this flag word changes.  Bit 2 =
  * clock Optical (bit clear = Internal, the default); bit 10 = Optical-Out
- * S/PDIF (bit clear = ADAT, the default).  Bit 6 (EQ for Record) is next
- * in the driver's own upstream follow-up list, not wired to a control
- * yet - the composer below OR's in every tracked bit, structured so that
- * one can be added the same way without another flag-stomping rewrite.
+ * S/PDIF (bit clear = ADAT, the default); bit 6 = EQ for Record turned
+ * off (bit clear = on, the default).  bf_settings_word() OR's in every
+ * tracked bit.
  */
 #define BF_SETTINGS_CLOCK_INTERNAL	0x0001
 #define BF_SETTINGS_CLOCK_OPTICAL	0x0004
 #define BF_SETTINGS_OPTICAL_SPDIF	0x0400
+/* "EQ for Record" in the Windows settings dialog: bit 6 is set when the
+ * box is cleared (TotalMix FX, 2026-11-11: cleared 0x0041, set 0x0001).
+ */
+#define BF_SETTINGS_EQ_NOT_RECORDED	0x0040
 
-/* Preamp state byte (0x17, wIdx 0x003F - full state, verified).
+/* Preamp state byte (0x17, wIdx 0x003F - full state, verified).  This
+ * is the write index; the state reads back at BF_REG_PANEL_READ (a read
+ * at 0x003F returns 0).
  * NOTE 2026-08-26 (cap_reflevel3.pcap): the 0x0C "base" is NOT a
  * constant - it is the Instr 3/4 REF-LEVEL bits (bits 2-3, +4dBu =
  * 0x0C set; -10dBV/Boost = clear; Boost additionally commits 0x21
@@ -274,8 +279,8 @@
 #define BF_MASTER_8_MIN			0x73
 #define BF_MASTER_MUTE			0x3b
 #define BF_MASTER_UNMUTE		0xf3
-/* -20 dB master, 8-bit and 16-bit: the exact pair the hardware DIM
- * button writes (cap_dim2.pcap), reused as the power-on default.
+/* -20 dB master, 8-bit and 16-bit: the pair DIM writes on a 0 dB
+ * master (cap_dim2.pcap), used as the power-on default.
  */
 #define BF_MASTER_MINUS20_8		0xcb
 #define BF_MASTER_MINUS20_16		0x0333
@@ -288,12 +293,20 @@
 #define BF_MASTER_STEP_0DB		181
 #define BF_MASTER_STEP_MAX		193
 #define BF_MASTER_STEP_MINUS20		(BF_MASTER_STEP_0DB - 40)
+/* DIM's cut, in master steps: 20 dB. */
+#define BF_DIM_STEPS			40
 
-/* Crosspoint fader curve: 0 dB = 0x16a0, +6 dB = 0x2d41 (fader curve,
- * DIFFERENT from the master 0x4000 top - see CALIBRATION.md).
+/* Crosspoint fader curve of a mono source (AN1-4): 0 dB = 0x16a0,
+ * +6 dB = 0x2d41, the -3 dB centre of the pan law (see CALIBRATION.md).
  */
 #define BF_FADER_0DB			0x16a0
 #define BF_FADER_TOP			0x2d41
+/* A stereo source (AS1/2, the ADAT pairs, the playback pairs) has no
+ * pan law: TotalMix FX writes 0x2000 for 0 dB and 0x4000 for +6 dB
+ * (measured 2026-11-11 against TotalMix in a Windows VM).
+ */
+#define BF_FADER_STEREO_0DB		0x2000
+#define BF_FADER_STEREO_TOP		0x4000
 
 /* The crosspoint matrix sources (14 controls per output). */
 struct bf_source {
@@ -312,6 +325,11 @@ extern const struct bf_source bf_sources[14];
  * output until a mixer raises its crosspoint.
  */
 #define BF_SRC_PB1			8
+/* The first stereo source in bf_sources[]: AS1/2.  The four analog
+ * inputs before it are mono.
+ */
+#define BF_SRC_STEREO			4
+#define BF_WIDTH_STEREO			100	/* width: +1.00, plain stereo */
 
 /* One analog-input strip of the DSP EQ (babyfacepro-ctl.c). */
 struct bf_eq_channel {
@@ -359,6 +377,7 @@ struct snd_usb_babyface {
 	bool streaming;			/* URBs actually in flight */
 	ktime_t stream_stopped;		/* when the last session's URBs stopped */
 	bool shutdown;
+	unsigned int slot;		/* index[]/id[] entry, see probe() */
 	atomic_t urb_err;		/* consecutive bad URBs (stops the stream) */
 	struct work_struct stream_work;
 
@@ -425,10 +444,11 @@ struct snd_usb_babyface {
 	bool ms_proc;			/* MS processor engaged */
 	bool clock_optical;		/* clock source: false = Internal (default) */
 	bool optical_spdif;		/* Optical Out: false = ADAT (default) */
-	int width;			/* width knob -100..+100 */
+	bool eq_not_recorded;		/* EQ for Record off (default: on) */
+	s8 xwidth[14];			/* stereo sources' width, -100..100 */
 	u16 fx_send;			/* FX send level 0..0x1000 */
 	u16 dim_saved[2];		/* pre-DIM Phones master (out 1 L/R) */
-	bool dim;			/* DIM engaged (fixed -20 dB on Phones) */
+	bool dim;			/* DIM engaged (-20 dB on Phones) */
 
 
 	/* front panel (babyfacepro-ctl.c) - 0x17 readback poll */
@@ -515,6 +535,7 @@ const struct bf_rate *bf_rate_lookup(unsigned int rate);
 unsigned int bf_rate_family(const struct bf_rate *r);
 int bf_vendor_write(struct snd_usb_babyface *chip, u8 req, u16 val, u16 idx);
 int bf_vendor_read(struct snd_usb_babyface *chip, u8 req, u16 idx, u8 *buf);
+u16 bf_settings_word(struct snd_usb_babyface *chip);
 int bf_settings_write(struct snd_usb_babyface *chip);
 int bf_clock_write(struct snd_usb_babyface *chip);
 int bf_pitch_write(struct snd_usb_babyface *chip, int pitch);
@@ -539,6 +560,7 @@ int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
 		    u16 l, u16 r);
 int babyface_create_masters(struct snd_usb_babyface *chip);
 int babyface_create_xpoints(struct snd_usb_babyface *chip);
+int babyface_create_xwidths(struct snd_usb_babyface *chip);
 int babyface_create_trim(struct snd_usb_babyface *chip);
 int babyface_create_preamp(struct snd_usb_babyface *chip);
 int bf_preamp_state_write(struct snd_usb_babyface *chip);
@@ -549,7 +571,6 @@ int bf_trim_apply(struct snd_usb_babyface *chip, int mic, int trim_db2);
 int bf_gain_max_db(int mic);
 u8 bf_gain_raw(int mic, int db);
 int bf_loopback_write_map(struct snd_usb_babyface *chip, int out, bool on);
-int bf_width_apply(struct snd_usb_babyface *chip, int w);
 int bf_dim_apply(struct snd_usb_babyface *chip, bool on);
 int babyface_create_flags(struct snd_usb_babyface *chip);
 int babyface_create_panel(struct snd_usb_babyface *chip);

@@ -607,6 +607,13 @@ arithmetic) - which is exactly why that verification mattered.
   output; raising an input's crosspoint in a mixer is what monitors it.
   The defaults still land before `alsactl restore`, but a fresh load can
   no longer blast a live input into the outputs.
+- **DIM is relative, and its scope is settled** (2026-11-11, TotalMix
+  FX in a Windows VM with the unit passed through, usbmon on the host).
+  DIM takes 20 dB off the current level; the "absolute" reading below
+  came from a capture made at 0 dB.  Main Out is a TotalMix-only
+  setting (reassigning it writes nothing) and DIM follows it; a fresh
+  install names PH 3/4, which is what the driver dims.  Details in
+  PROTOCOL.md, "DIM semantics".  The notes below are the earlier state.
 - **DIM's scope is Phones-only, and that is confirmed faithful to the
   hardware, not a driver limitation - with one real open question.**
   PROTOCOL.md's own capture states plainly: "DIM only ever touched the

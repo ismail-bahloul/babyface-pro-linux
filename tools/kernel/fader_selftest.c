@@ -7,9 +7,10 @@
  * extract_laws.py - run through selftests.sh.
  *
  * laws: bf_fader_curve bf_fader_raw_to_db2 bf_fader_db2_to_raw
- *	 BF_FADER_DB2_INF
+ *	 BF_FADER_DB2_INF bf_width_part
  */
 #include <stdio.h>
+#include <stdlib.h>
 
 static int fails;
 
@@ -91,6 +92,22 @@ int main(void)
 		chk("mix -2 clicks move", bf_fader_db2_to_raw(db2) <
 		    bf_fader_db2_to_raw(-104), 1);
 	}
+	/* A stereo source's width, against the TotalMix FX captures of
+	 * 2026-11-11: a 0 dB pair (0x2000) at +0.99, +0.98 and +0.97, and
+	 * the side attenuated by the pan (0x1e14) at +0.99. */
+	chk("width 0.99 direct", bf_width_part(0x2000, 99), 0x1fd7);
+	chk("width 0.99 cross", bf_width_part(0x2000, -99), 0x0029);
+	chk("width 0.98 direct", bf_width_part(0x2000, 98), 0x1fae);
+	chk("width 0.98 cross", bf_width_part(0x2000, -98), 0x0052);
+	chk("width 0.97 cross", bf_width_part(0x2000, -97), 0x007b);
+	chk("width 0.99 panned", bf_width_part(0x1e14, 99), 0x1dee);
+	/* 0x1e14 / 200 is 38.5: TotalMix wrote 0x0026, from a pan gain
+	 * it keeps as a float; one step either way is the rounding. */
+	chk("width 0.99 panned x",
+	    abs(bf_width_part(0x1e14, -99) - 0x0026) <= 1, 1);
+	chk("width 1.00 is plain", bf_width_part(0x4000, 100), 0x4000);
+	chk("width 1.00 no cross", bf_width_part(0x4000, -100), 0);
+	chk("width 0 is mono", bf_width_part(0x2000, 0), 0x1000);
 	if (fails)
 		printf("== %d FAILURES ==\n", fails);
 	else

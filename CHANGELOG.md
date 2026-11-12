@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- The stream URBs and their DMA buffers are freed at disconnect, not when
+  the last application closes the card, after the host controller that
+  allocated them may be gone.
+- A stream that failed to start no longer leaves the other direction
+  running with no URBs; it is stopped with an xrun.
+- At 64 kHz and above, a period shorter than the device's packet (with
+  `urb_frames_min` lowered) is no longer offered and then refused in
+  hw_params.
+- Probe read the 48V, PAD and ref level state at the wrong index, after
+  the cold init had cleared it, so it always found everything off and the
+  unit lost the state it keeps across power cycles. It now reads it the
+  way TotalMix does, before the cold init, and writes it back.
+- A high shelf in the EQ was stored with the sign of its a1 coefficient
+  wrong, so it did not shelve: +3 dB at 5 kHz came out about 17 dB low
+  across the band. The bell and the low shelf were right.
+- The EQ strip's shared output gain is the product of its bands' gains, as
+  TotalMix writes it, not the last band's: with more than one band on, the
+  level of the whole strip was off by the other bands' gain (0.2 dB for two
+  bands at +3 dB, more with larger gains).
+- Disconnect no longer turns USB autosuspend on for the whole device,
+  MIDI interface included.
+- Each unit takes its own `index`/`id` module parameter entry.
+- `Dim Switch` takes 20 dB off the Phones level instead of setting it to
+  -20 dB, which made a quieter level louder. This is what TotalMix writes,
+  checked against TotalMix FX on the unit.
+
+### Changed
+- The crosspoints of the stereo sources (AS1/2, the ADAT pairs, the
+  playback pairs) use TotalMix's stereo scale: 0 dB is 0x2000 and the top
+  is +6 dB at 0x4000, where they shared the mono inputs' scale (0 dB =
+  0x16a0, the pan law's centre). Saved levels keep their raw value, so
+  they sound the same and read 3 dB lower. The playback now defaults to
+  TotalMix's 0 dB, 3 dB above the old default.
+- `Width` is replaced by a `<source> Width` control per stereo source,
+  applied to the source's crosspoints into every output, as TotalMix does.
+  The old control wrote fixed values into the AN1 and AN2 crosspoints of
+  two outputs, over the levels set there.
+
+### Added
+- `EQ for Record Switch`, the Windows settings dialog's "EQ for Record"
+  box (bit 6 of the settings word, set when it is cleared; on by
+  default). The words match RME's driver, checked with usbmon.
+- Probe checks that the streaming altsettings have the expected interrupt
+  endpoints before using them.
+
 ## 0.2.3 (2026-11-05)
 
 ### Fixed

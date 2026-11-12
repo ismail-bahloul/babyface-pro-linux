@@ -15,7 +15,8 @@ playback-solid but drop the occasional capture buffer.
 - 6 output masters and mutes
 - the full 6x14 crosspoint matrix
 - 4 preamp gains, phantom power and PAD
-- pitch/varispeed, loopback, width, FX send, MS processing, input link, AN 1>2
+- pitch/varispeed, loopback, width per stereo source, FX send, MS processing,
+  input link, AN 1>2
 - clock source, optical out format (ADAT/S/PDIF), reference level, phase and
   trim
 
@@ -28,7 +29,8 @@ display.
 
 DIM presses are reported through `DIM Button Press Count` for a mixer
 application to act on ([TuxMix](https://github.com/ismail-bahloul/TuxMix)
-does); the `Dim Switch` control still applies the fixed Phones dim.
+does); the `Dim Switch` control takes 20 dB off the Phones level, as TotalMix
+does with its default Main Out.
 
 ## Power management
 

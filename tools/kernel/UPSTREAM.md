@@ -22,7 +22,7 @@ and the driver is standalone, modeled on `snd-usb-caiaq`.
     (standard + low),
   - pitch/varispeed (−5%…+5%, 16.8 fixed-point DDS quads),
   - loopback (30-channel 0x15 map), AN1>2, AN1/2 link, MS processor,
-    width, FX send, DIM (−20 dB absolute on Phones),
+    width, FX send, DIM (−20 dB from the current Phones level),
   - front-panel poll (0x17 readback → read-only ALSA controls:
     buttons, wheel, IN/OUT selection, MIX, DIM).
 - Re-probe resilience: full mixer cache restored across unbind/rebind
@@ -118,6 +118,11 @@ it as the record of what was actually mailed on 2026-09-02.
    stream) is a deliberate follow-up, not implemented/tested this
    round — say so explicitly in the cover letter rather than shipping
    an untested code path.
+   **Changed for v9 (2026-11-11, Sashiko on v8):** both calls are gone.
+   The USB core already forbids autosuspend on a new device, and since
+   the driver does not set `supports_autosuspend` the core keeps the
+   device awake while the interface is bound. The enable at disconnect
+   flipped `power/control` for the whole device, MIDI included.
 4. ~~**The panel poll** runs at 50 Hz continuously (vendor reads).  If~~
    ~~reviewers object to always-on polling, gate it on the card having a~~
    ~~control file open or make the interval a module param.~~
@@ -128,8 +133,11 @@ it as the record of what was actually mailed on 2026-09-02.
    not gated on usage — flag this if a reviewer wants the stronger
    fix.
 5. **Open protocol items** (documented in PROTOCOL.md, not blockers):
-   the preamp readback byte0 index semantics (0x003F vs 0x0000), the
-   width strip-ownership tail (cap_width7 family), and the EQ HF warp.
+   the preamp readback byte0 index semantics (0x003F vs 0x0000; settled
+   2026-11-11: read at 0x0000, before the cold init), the
+   width strip-ownership tail (cap_width7 family; settled 2026-11-11:
+   width belongs to a stereo source and covers all its outputs, see
+   PROTOCOL.md), and the EQ HF warp.
    (The ref-level 3-state map was FULLY DECODED 2026-08-26 — see
    LINUX-VALIDATION.md. It is now exposed as the `Instrument Ref Level`
    enum too, added 2026-09-06 — this note used to say "just isn't

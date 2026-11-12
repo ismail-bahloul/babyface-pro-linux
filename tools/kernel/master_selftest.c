@@ -4,7 +4,7 @@
  * The helpers are the driver's own, pulled out of babyfacepro-ctl.c by
  * extract_laws.py - run through selftests.sh.
  *
- * laws: bf_master_16bit bf_master_reg8 bf_master_reg16
+ * laws: bf_master_16bit bf_master_reg8 bf_master_reg16 bf_dim_step
  */
 #include <stdio.h>
 
@@ -68,6 +68,30 @@ int main(void)
 		if (bf_master_reg16(i) != bf_master_16bit(i - 181)) {
 			printf("FAIL reg16 step %d\n", i);
 			fails++;
+		}
+	}
+	/* DIM takes 20 dB off the current level: the 8-bit pairs TotalMix
+	 * writes on a Phones master at 0, -10 and -22 dB, and the bottom
+	 * step below that, never mute */
+	{
+		static const struct { unsigned int step; uint8_t want; } d8[] = {
+			{ 181, 0xcb }, { 161, 0xb7 }, { 137, 0x9f },
+		};
+		for (i = 0; i < (int)(sizeof(d8) / sizeof(d8[0])); i++) {
+			uint8_t got = bf_master_reg8(bf_dim_step(d8[i].step));
+			if (got != d8[i].want) {
+				printf("FAIL dim step %u -> 0x%02x want 0x%02x\n",
+				       d8[i].step, got, d8[i].want);
+				fails++;
+			} else {
+				printf("ok   dim step %3u -> 0x%02x\n", d8[i].step, got);
+			}
+		}
+		for (i = 1; i <= 41; i++) {
+			if (bf_dim_step(i) != 1) {
+				printf("FAIL dim step %d not the bottom\n", i);
+				fails++;
+			}
 		}
 	}
 	printf(fails ? "== %d FAILURES ==\n" : "== ALL OK ==\n", fails);

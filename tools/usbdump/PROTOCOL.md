@@ -676,10 +676,10 @@ SETTINGS COMMAND WORD. Confirmed by dedicated captures:
 
 | wVal | Setting | Capture |
 |---|---|---|
-| 0x0001 | default (ADAT optical, EQ-record off, clock Internal) | all |
+| 0x0001 | default (ADAT optical, EQ for Record on, clock Internal) | all |
 | 0x0004 | clock source = Optical (device: 0x17 byte 2 = 0x80, no lock) | cap_clk |
 | 0x0401 | Optical Out = SPDIF (0x0001 = ADAT) | cap_opt |
-| 0x0041 | EQ for Record = ON (0x0001 = off) | cap_eqr |
+| 0x0041 | EQ for Record = OFF (0x0001 = on) | TotalMix VM, 2026-11-11 |
 
 Bit map: bit 2 = clock Optical, bit 6 = EQ for Record, bit 10 = SPDIF
 out. The device reacts to these bits (clock: 0x80 no-lock readback).
@@ -689,17 +689,15 @@ flag word (EXCEPT pitch, which writes the 0x1B DDS quads, and the full
 state uploads the app does on open/OK, which are host-side re-syncs
 and not needed to change a setting).
 
-> **Disputed (reported in #31, 2026-10-26; not yet checked on the FS).**
-> Captures of RME's driver 1.277 and TotalMix FX 1.991 on a Babyface Pro
-> rev 6 (firmware 211) read this word differently. Bit 6 set means EQ for
-> Record **off**: `0x0041` came with the Settings dialog's checkbox cleared,
-> `0x0001` with it ticked, as installed, the opposite of the table above.
-> TMS writes no bit. And the word is not a keepalive: RME's driver writes it
-> when the Settings dialog opens and after each change in it, never at
-> intervals, and none of 42 captures taken without the dialog holds it, those
-> with audio streaming included. The `0x0441` of a rate change would then be
-> Optical Out SPDIF with EQ for Record off. To settle it: set a strong EQ on
-> an input and compare a capture with the bit set and with it clear.
+> **Settled 2026-11-11, against RME's driver on the FS.** Bit 6 set means
+> EQ for Record **off**: `0x0041` is written when the Settings dialog's
+> checkbox is cleared, `0x0001` when it is ticked (the installed default);
+> the rows above had it the other way round, as reported in #31.
+> The word is written on each change in the dialog (Optical Out SPDIF
+> `0x0401`, clock Optical `0x0004` with bit 0 clear, and back to
+> `0x0001`), and TMS writes nothing new (`0x0001` both ways). The driver
+> composes the same words (`0x0041`, `0x0441`, `0x0444`), checked with
+> usbmon.
 
 ### Pitch / varispeed — the 0x1B quad is 24-bit fixed point (cap_pitch.pcap, 2026-08-23, FULL SWEEP DECODED)
 
@@ -1464,11 +1462,9 @@ BF_REG_MASTER_8 0x0006/7, BF_REG_MASTER_16 0x03e2/3):
 | DIM ON | 0xCB | 0x0333 | wVal=0x2000 |
 | DIM OFF | restore pre-DIM | restore pre-DIM | wVal=0x0000 |
 
-- **DIM = an absolute −20 dB** on the Phones master (0xF3 − 0xCB =
-  40 × 0.5 dB; 16-bit 0x0333 ≈ −20 dB), **independent of the current
-  level** — verified with pre-DIM at 0 dB (0xF3) and −40 dB (0xA3):
-  DIM always writes 0xCB/0x0333 (and would make a −40 dB monitor
-  LOUDER, so it is a fixed level, not a floor).
+- ~~DIM = an absolute −20 dB~~ — wrong, see "Settled 2026-11-11"
+  below: DIM is −20 dB from the current level.  This capture wrote
+  0xCB/0x0333 (0xF3 − 0xCB = 40 × 0.5 dB) from a 0 dB master.
 - The pre-DIM level is kept host-side and restored on DIM OFF — the
   driver needs the same two-value cache.
 - The 0x17 wVal=0x2000 wIdx=0x2000 write is the DIM flag (likely the
@@ -1478,21 +1474,34 @@ BF_REG_MASTER_8 0x0006/7, BF_REG_MASTER_16 0x03e2/3):
   now has a DIM control (added 2026-09-13), wired to exactly this
   Phones-only burst.
 
-  **OPEN QUESTION (2026-09-14, raised by David Fredman, issue #4):**
-  "Main Out" is documented above (§ front-panel semantics) as a
-  TotalMix-side setting, reassignable, and DIM is called "a
-  configurable hotkey" there — meaning this capture may just show the
-  DEFAULT Main Out (Phones), not the ONLY possible target.  We have
-  never captured a session with Main Out reassigned to a different
-  output (e.g. AN1/2) to see whether the DIM burst follows it to a
-  different master register pair, or whether "Main Out" reassignment
-  is purely a host-side UI routing concept with no corresponding
-  protocol difference.  Needed to settle this properly: a fresh
-  Windows capture — set Main Out = AN1/2 in TotalMix's settings, press
-  DIM, see which master registers change (if any).  Until then, the
-  driver keeps the one behavior actually observed on the wire
-  (Phones-only) rather than guessing at a broader scope no capture
-  supports.
+  **Settled 2026-11-11 (TotalMix FX in a Windows VM, Babyface
+  passed through, usbmon on the host).**  Two corrections to the
+  above:
+
+  - **DIM is relative, not absolute.** It takes 20 dB off the current
+    level.  Main at -10 dB: DIM writes 0xB7 / 0x0103 (-30 dB).  Main
+    at -21.8 dB (0xC7 / 0x029B): DIM writes 0x9F / 0x0042 (-41.8 dB).
+    Main at 0 dB gives the 0xCB / 0x0333 pair of cap_dim2, which is
+    why that capture looked like a fixed level.  The 16-bit value is
+    0x2000 * 10^(dB/20), exact.
+  - **DIM follows TotalMix's Main Out, and Main Out exists only on
+    the host.**  Reassigning Main Out (control room, assign > Main
+    Out) writes nothing to the unit.  With Main Out = AN 1/2, DIM
+    writes the AN1/2 masters (0x1A idx 0x0004/5, 0x12 idx
+    0x03E0/1) with the same -20 dB relative cut.  A fresh install
+    has Main Out = PH 3/4.
+  - The 0x17 wVal=0x2000 wIdx=0x2000 flag is sent only when Main Out
+    is PH 3/4; with Main Out = AN 1/2, DIM on and off both write
+    wVal=0x0000.
+  - Moving the Main fader while DIM is on writes the new level as it
+    is (TotalMix shows the dimmed level on the fader), and DIM off
+    goes back to the level from before DIM, dropping the change.  The
+    Linux driver keeps the undimmed volume in the master control
+    instead, so a change under DIM is where DIM off returns.
+
+  The driver dims the Phones pair by 20 dB from its current level
+  (bf_dim_step()), which is TotalMix's behaviour with its default Main
+  Out.
 
 ### System volume — HOST-SIDE stream gain, zero USB writes (cap_sysvol2.pcap, 2026-08-26)
 
@@ -2013,7 +2022,42 @@ distinguished only by the 0x21 wVal 0x0003.
   per-strip width register offsets, mapping still open (5 more
   captures to diff).
 
+### Width and the stereo fader scale — measured against TotalMix FX (2026-11-11)
+
+TotalMix FX in a Windows VM with the unit passed through, usbmon on the
+host.  This supersedes the cap_width3-7 reading below, which predates
+the corrected crosspoint map (`0x34 * pair + 0x1A * side + source`).
+
+- **Width has no register of its own.**  It belongs to a stereo
+  strip (here the playback pair 1/2, sources 12/13) and rewrites that
+  strip's crosspoints into **every output it is routed to** (AN1/2 and
+  PH3/4 in the test), four registers per output, in this order:
+  srcL->outL, srcL->outR, srcR->outL, srcR->outR.
+- With g_L / g_R the output side's level (fader and pan) and w the
+  width (-1.00..+1.00): srcL->outL = g_L(1+w)/2, srcR->outL =
+  g_L(1-w)/2, srcR->outR = g_R(1+w)/2, srcL->outR = g_R(1-w)/2.  At
+  0 dB and w = 0.99/0.98/0.97: 0x1FD7/0x0029, 0x1FAE/0x0052,
+  0x1F85/0x007B.  With the fader at -11.3 dB the same width writes
+  0x088E/0x0021; with the pan to the right (g_L = 0x1E14, g_R =
+  0x2000) it writes 0x1DEE/0x0026 into out L and 0x1FD7/0x0029 into
+  out R.
+- **A stereo strip's 0 dB is 0x2000, its +6 dB 0x4000.**  A mono strip
+  (AN1) centred has 0 dB = 0x16A0 per side (+0.2 dB wrote 0x173C): the
+  -3 dB centre of the pan law.  A stereo strip's pan is a balance:
+  it only lowers one side (0x2000 -> 0x1E14 on L for a few clicks to
+  the right, R stays 0x2000).
+- The driver follows this: the crosspoint controls of the stereo
+  sources top out at 0x4000 (same TLV, +6 dB at the top), the playback
+  defaults to 0x2000, and each stereo source has a `<source> Width`
+  control (-100..100) applied over all outputs.  The old `Width`
+  control, which wrote fixed AN1/AN2 values into AN1/2 and PH3/4, is
+  gone: AN1 and AN2 are mono sources whose four crosspoints are
+  already controls of their own.
+
 ### Width strip mapping — cap_width3-7 ANALYZED (2026-08-26)
+
+*Superseded by the section above.*
+
 
 Every width drag step writes 12 registers in a fixed order: 3 families
 × 4 (the strip's src pair, L first then R, both on the L-map and its
@@ -2129,7 +2173,16 @@ mirrors it into read-only `Front Panel *` ALSA controls.  Live findings:
   on the first IN press.
 - **byte3 idle base confirmed 0x40 live** (the flash values 0x41..0x60
   ride above it).
-- **OPEN — preamp byte0 readback index**: with 48V Mic1 ON, a wIdx=
+- **Preamp byte0 readback index — settled 2026-11-11** (TotalMix FX in
+  a Windows VM, unit passed through, usbmon on the host; then a debug
+  build reading both indexes around each cold-init step): TotalMix only
+  ever reads 0x17 at wIdx=0x0000, and its byte 0 follows the preamp
+  state (PAD AN1: 0x0C -> 0x1C -> 0x0C).  A read at wIdx=0x003F returns
+  byte0 = 0x00 whatever the state.  The cold init's 0x16 clears zero
+  the state (0x11 before, 0x00 after), so the driver reads it at
+  wIdx=0x0000 before the cold init and writes it back after.  The
+  earlier note follows.
+- *Earlier:* with 48V Mic1 ON, a wIdx=
   0x0000 read returns byte0 = 0x01 (raw bit) but a wIdx=0x003F read
   returns byte0 = 0x00 — and interleaving the two (p48watch) made BOTH
   read 0x00 for the whole run while the control stayed ON, then a lone

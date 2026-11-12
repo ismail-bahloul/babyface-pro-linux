@@ -11,8 +11,8 @@
  * The helpers are the driver's own, pulled out of babyfacepro-ctl.c by
  * extract_laws.py - run through selftests.sh (links with -lm).
  *
- * laws: bf_eq_band_words bf_eq_lc_freq_raw bf_eq_lc_slope_byte
- *	 BF_EQ_Q27 BF_EQ_LC_OFF
+ * laws: bf_eq_band_words bf_eq_cascade bf_eq_lc_freq_raw
+ *	 bf_eq_lc_slope_byte BF_EQ_Q27 BF_EQ_LC_OFF
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,7 +56,7 @@ static void ref_words(double *w, int type, int32_t freq_hz, int32_t q100,
 			b1 = -2 * A * ((A - 1) + (A + 1) * co);
 			b2 = A * ((A + 1) + (A - 1) * co - sq);
 			a0 = (A + 1) - (A - 1) * co + sq;
-			a1 = -2 * ((A - 1) - (A + 1) * co);
+			a1 = 2 * ((A - 1) - (A + 1) * co);
 			a2 = (A + 1) - (A - 1) * co - sq;
 		}
 	}
@@ -141,6 +141,84 @@ int main(void)
 				fails++;
 			}
 		}
+	}
+
+	/* shelves, in the response domain and so independent of the
+	 * reference above (which once shared the driver's wrong sign on the
+	 * high shelf's a1): a low shelf takes its gain at DC and nothing at
+	 * Nyquist, a high shelf the other way round.  Gain at the corner
+	 * is half the gain in dB at Q 0.7. */
+	{
+		static const int32_t sf[] = { 100, 1000, 5000, 10000 };
+		static const int32_t sg[] = { -120, -30, 30, 120 };
+		int a, b, ty;
+
+		for (ty = 2; ty <= 3; ty++)
+			for (a = 0; a < 4; a++)
+				for (b = 0; b < 4; b++) {
+					int32_t w[5];
+					double g = sg[b] / 10.0;
+					double far = resp_db(w, ty == 2 ? M_PI : 0.0);
+					double near_;
+					double w0 = 2 * M_PI * sf[a] / fs;
+
+					bf_eq_band_words(w, ty, sf[a], 70, sg[b], fs);
+					far = resp_db(w, ty == 2 ? M_PI : 0.0);
+					near_ = resp_db(w, ty == 2 ? 0.0 : M_PI);
+					if (fabs(far) > 0.1 || fabs(near_ - g) > 0.1 * fmax(1.0, fabs(g))) {
+						printf("ERR %s shelf %d Hz %+.1f dB: far %.2f near %.2f (want 0, %.2f)\n",
+						       ty == 2 ? "low" : "high", sf[a], g,
+						       far, near_, g);
+						fails++;
+					}
+					(void)w0;
+				}
+		printf("shelves: DC/Nyquist gains %s\n", fails ? "FAIL" : "PASS");
+	}
+
+	/* the words TotalMix FX wrote for a strip on a Babyface Pro at
+	 * 48 kHz (usbmon, Windows VM, 2026-11-11): low shelf 80 Hz, bell
+	 * 1 kHz and high shelf 5 kHz, all Q 1.0 and +3 dB, and the shared
+	 * gain 0x0ac86021 that goes with all three on.  TotalMix computes in
+	 * single precision, so a few LSB of 2^-27 are its own rounding. */
+	{
+		static const struct {
+			int ty;
+			int32_t f, g;
+			uint32_t want[4];
+		} tm[] = {
+			{ 2, 80, 30, { 0xf013c43a, 0x07ec6bec, 0xf0178365, 0x07e8c08e } },
+			{ 1, 1000, 30, { 0xf0f6dc08, 0x072a5ac0, 0xf147f093, 0x06d8931a } },
+			{ 3, 5000, 30, { 0xf6f61e27, 0x03e83935, 0xf5ddb5c7, 0x044f5939 } },
+			{ 3, 5000, -30, { 0xf5ddb5c5, 0x044f593a, 0xf6f61e29, 0x03e83935 } },
+		};
+		int32_t sh = BF_EQ_Q27, sh2 = BF_EQ_Q27;
+		int n, k;
+
+		for (n = 0; n < 4; n++) {
+			int32_t w[5];
+
+			bf_eq_band_words(w, tm[n].ty, tm[n].f, 100, tm[n].g, fs);
+			for (k = 0; k < 4; k++)
+				if (llabs((int64_t)w[k] - (int64_t)(int32_t)tm[n].want[k]) > 64) {
+					printf("ERR TotalMix word type %d %d Hz %+d: c%d 0x%08x want 0x%08x\n",
+					       tm[n].ty, tm[n].f, tm[n].g, k,
+					       (unsigned)w[k], tm[n].want[k]);
+					fails++;
+				}
+			if (n < 3)
+				sh = bf_eq_cascade(sh, w[4]);
+			if (n == 1 || n == 3)
+				sh2 = bf_eq_cascade(sh2, w[4]);
+		}
+		/* all three bands on, then the bell with the -3 dB high shelf */
+		if (llabs((int64_t)sh - 0x0ac86021) > 64 ||
+		    llabs((int64_t)sh2 - 0x063301c2) > 64) {
+			printf("ERR shared gain 0x%08x (want 0x0ac86021), 0x%08x (want 0x063301c2)\n",
+			       (unsigned)sh, (unsigned)sh2);
+			fails++;
+		}
+		printf("TotalMix words and shared gain: %s\n", fails ? "FAIL" : "PASS");
 	}
 
 	/* effective Q at high frequency, against what RME's unit did: the
