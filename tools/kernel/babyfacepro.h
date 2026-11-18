@@ -50,6 +50,7 @@
  */
 
 #include <linux/ktime.h>
+#include <linux/list.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/unaligned.h>
@@ -64,6 +65,7 @@
 
 /* The proprietary audio interface (interface 5, interrupt endpoints). */
 #define BF_IFACE			5
+#define BF_MIDI_IFACE			2	/* MIDIStreaming, no AudioControl */
 #define BF_EP_OUT			0x01
 #define BF_EP_IN			0x82
 
@@ -362,10 +364,26 @@ struct bf_eq_channel {
 	s32 shared;		/* cached c4 (shared by the slots) */
 };
 
+/* The MIDI helpers of snd-usbmidi-lib (sound/usb/midi.h, not installed
+ * with the kernel headers).  Built in-tree, this block becomes
+ * #include "midi.h".  A NULL quirk means a standard MIDIStreaming
+ * interface, whose ports and endpoints come from its descriptors.
+ */
+struct snd_usb_audio_quirk;
+int __snd_usbmidi_create(struct snd_card *card, struct usb_interface *iface,
+			 struct list_head *midi_list,
+			 const struct snd_usb_audio_quirk *quirk,
+			 unsigned int usb_id, unsigned int *num_rawmidis);
+void snd_usbmidi_disconnect(struct list_head *p);
+void snd_usbmidi_suspend(struct list_head *p);
+void snd_usbmidi_resume(struct list_head *p);
+
 struct snd_usb_babyface {
 	struct snd_card *card;
 	struct usb_device *dev;
 	struct usb_interface *iface;
+	struct usb_interface *midi_iface;	/* claimed, or NULL */
+	struct list_head midi_list;		/* snd-usbmidi-lib's ports */
 
 	struct mutex mutex;		/* controls + stream geometry */
 	spinlock_t lock;		/* hw_ptr / subs */

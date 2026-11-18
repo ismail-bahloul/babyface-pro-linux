@@ -21,9 +21,11 @@ hardware:
 2. The only in-tree precedent for interrupt audio streaming is
    `snd-usb-caiaq` (and `snd-usb-line6`) — the review model.
 3. The class-compliant mode (other PID) keeps working via snd-usb-audio
-   untouched; our driver only owns interface 5 (probe returns -ENODEV
-   for the others; the standard MIDI interface 2 stays with
-   snd-usb-audio).
+   untouched; our driver's card starts from interface 5 (probe returns
+   -ENODEV for the others) and claims the standard MIDI interface 2
+   from there: snd-usb-audio's generic match is the AudioControl
+   interface, which the proprietary mode lacks, so nothing else binds
+   it (checked on the unit: no driver on interface 2, no rawmidi).
 
 ## Current stack (user-space reference, hardware-validated)
 

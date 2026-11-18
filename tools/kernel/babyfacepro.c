@@ -1648,6 +1648,52 @@ bad:
 	return -ENODEV;
 }
 
+static struct usb_driver babyface_driver;
+
+/* The MIDI ports: interface 2 is a standard MIDIStreaming interface, but
+ * without the AudioControl interface that snd-usb-audio matches on in
+ * its generic table, so nothing else binds it in proprietary mode.
+ * Claim it and hand it to snd-usbmidi-lib.  A unit whose MIDI cannot be
+ * set up still has its audio and mixer, so failures only warn.
+ */
+static void bf_midi_create(struct snd_usb_babyface *chip)
+{
+	struct usb_interface *iface = usb_ifnum_to_if(chip->dev, BF_MIDI_IFACE);
+	int err;
+
+	if (!iface)
+		return;
+	/* NULL data: the USB core also calls this driver's disconnect and
+	 * suspend for the claimed interface, which must find no chip there.
+	 */
+	err = usb_driver_claim_interface(&babyface_driver, iface, NULL);
+	if (err < 0) {
+		dev_warn(&chip->dev->dev, "MIDI interface not claimed: %d\n", err);
+		return;
+	}
+	err = __snd_usbmidi_create(chip->card, iface, &chip->midi_list, NULL, 0,
+				   NULL);
+	if (err < 0) {
+		dev_warn(&chip->dev->dev, "MIDI ports not created: %d\n", err);
+		usb_driver_release_interface(&babyface_driver, iface);
+		return;
+	}
+	chip->midi_iface = iface;
+}
+
+/* Stop the MIDI endpoints and give the interface back. */
+static void bf_midi_disconnect(struct snd_usb_babyface *chip)
+{
+	struct list_head *p;
+
+	list_for_each(p, &chip->midi_list)
+		snd_usbmidi_disconnect(p);
+	if (chip->midi_iface) {
+		usb_driver_release_interface(&babyface_driver, chip->midi_iface);
+		chip->midi_iface = NULL;
+	}
+}
+
 static int babyface_probe(struct usb_interface *intf,
 			  const struct usb_device_id *usb_id)
 {
@@ -1662,9 +1708,10 @@ static int babyface_probe(struct usb_interface *intf,
 	int i, err;
 
 	if (intf->cur_altsetting->desc.bInterfaceNumber != BF_IFACE) {
-		/* Only the proprietary audio interface is ours; the MIDI
-		 * (standard class) and bulk interfaces stay unclaimed so
-		 * snd-usb-audio can take the MIDI one.
+		/* Probe is called for every interface; only the audio one
+		 * starts a card.  The MIDI interface is claimed from there
+		 * (bf_midi_create): snd-usb-audio never binds it in
+		 * proprietary mode.  The bulk interfaces stay unclaimed.
 		 */
 		return -ENODEV;
 	}
@@ -1693,6 +1740,7 @@ static int babyface_probe(struct usb_interface *intf,
 	chip = card->private_data;
 	chip->card = card;
 	chip->slot = slot;
+	INIT_LIST_HEAD(&chip->midi_list);
 	/* From here on, every error path frees the card, and private_free()
 	 * gives the slot back.
 	 */
@@ -1938,6 +1986,8 @@ static int babyface_probe(struct usb_interface *intf,
 		goto error;
 	}
 
+	bf_midi_create(chip);
+
 	err = snd_card_register(chip->card);
 	if (err < 0) {
 		dev_err(&intf->dev, "snd_card_register failed: %d\n", err);
@@ -1957,6 +2007,7 @@ static int babyface_probe(struct usb_interface *intf,
 
 error:
 	usb_set_intfdata(intf, NULL);
+	bf_midi_disconnect(chip);
 	snd_card_free(chip->card);
 	return err;
 }
@@ -1992,6 +2043,7 @@ static void babyface_disconnect(struct usb_interface *intf)
 	babyface_pcm_stop_both(chip, SNDRV_PCM_STATE_DISCONNECTED);
 
 	snd_card_disconnect(chip->card);
+	bf_midi_disconnect(chip);
 	/* The session is down and stays down: prepare() and hw_params()
 	 * see ->shutdown under the mutex.  Free the URBs and their buffers
 	 * now, while the host controller that allocated them is still
@@ -2010,7 +2062,7 @@ static void babyface_disconnect(struct usb_interface *intf)
 static int babyface_suspend(struct usb_interface *intf, pm_message_t message)
 {
 	struct snd_usb_babyface *chip = usb_get_intfdata(intf);
-
+	struct list_head *p;
 	struct snd_device *sdev;
 
 	if (!chip)
@@ -2026,6 +2078,8 @@ static int babyface_suspend(struct usb_interface *intf, pm_message_t message)
 	}
 	cancel_work_sync(&chip->stream_work);
 	babyface_panel_stop(chip);
+	list_for_each(p, &chip->midi_list)
+		snd_usbmidi_suspend(p);
 	return 0;
 }
 
@@ -2076,8 +2130,13 @@ static int babyface_resume(struct usb_interface *intf)
 	 */
 	scoped_guard(mutex, &chip->mutex)
 		err = bf_resume_locked(chip);
-	if (!err)
+	if (!err) {
+		struct list_head *p;
+
 		babyface_panel_start(chip);
+		list_for_each(p, &chip->midi_list)
+			snd_usbmidi_resume(p);
+	}
 	return err;
 }
 

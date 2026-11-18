@@ -21,6 +21,12 @@
 #   obj-$(CONFIG_SND_USB_BABYFACE_PRO) += snd-usb-babyface-pro.o
 #
 # and Kconfig gains a `config SND_USB_BABYFACE_PRO` entry (see Kconfig).
+# The MIDI ports use snd-usbmidi-lib, which sound/usb/Makefile builds for
+# the drivers that need it; add this driver to that list:
+#
+#   obj-$(CONFIG_SND_USB_BABYFACE_PRO) += snd-usbmidi-lib.o
+#
+# and replace the prototypes in babyfacepro.h with #include "midi.h".
 
 obj-m := snd-usb-babyface-pro.o
 snd-usb-babyface-pro-objs := babyfacepro.o babyfacepro-ctl.o
