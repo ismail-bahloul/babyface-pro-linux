@@ -1,0 +1,20 @@
+name: selftests
+
+# The driver's checks that need no card and no kernel tree: the law
+# selftests and the PCM completion selftest, each run against the
+# driver's own code (tools/kernel/extract_laws.py).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  selftests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Law and PCM selftests
+        run: SELFTESTS_NO_BUILD=1 sh tools/kernel/selftests.sh
