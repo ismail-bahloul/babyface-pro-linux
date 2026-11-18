@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+- MIDI: the unit's two ports show up as ALSA rawmidi devices
+  (`amidi -l`: `Port 1`, `MIDI 2`) in proprietary mode. The driver used to
+  leave the MIDI interface to snd-usb-audio, which never binds it there:
+  its generic match is the AudioControl interface, which the proprietary
+  mode does not have. The driver now claims interface 2 and hands it to
+  snd-usbmidi-lib; the ports follow suspend/resume and disconnect. Output
+  checked on the unit with usbmon (USB-MIDI packets on bulk 0x07, cable 0
+  and 1); input is not checked, nothing was connected to the DIN ports.
+  Needs a kernel that exports `__snd_usbmidi_create`.
+
 ### Fixed
 - The stream URBs and their DMA buffers are freed at disconnect, not when
   the last application closes the card, after the host controller that

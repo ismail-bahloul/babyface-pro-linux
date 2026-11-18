@@ -7,6 +7,7 @@
 config SND_USB_BABYFACE_PRO
 	tristate "RME Babyface Pro FS (proprietary mode)"
 	select SND_PCM
+	select SND_RAWMIDI
 	help
 	  Say Y here to include support for the RME Babyface Pro FS in
 	  its proprietary mode (VID 0x2a39, PID 0x3fc0).
