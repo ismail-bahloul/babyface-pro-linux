@@ -93,7 +93,7 @@ the wheel shows which pair it moves.
 ## 7. Automated validation
 
 ```bash
-sh tools/kernel/selftests.sh   # law selftests + build + checkpatch — no card needed
+sh tools/kernel/selftests.sh   # law + PCM selftests, build, checkpatch — no card needed
 sh tools/kernel/regress.sh --dur 1 --mixer-restore --disconnect-test   # needs the card
 ```
 

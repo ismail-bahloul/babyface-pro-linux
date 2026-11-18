@@ -676,8 +676,9 @@ wakes the apps with an XRUN and re-counts `stream_users` (the old
 `stream_users` ++/-- is under `chip->lock` (the two substreams have
 separate ALSA locks — a lost increment stopped the stream mid-run);
 broken `SNDRV_PCM_INFO_PAUSE` removed (PAUSE_RELEASE reset hw_ptr to 0).
-`tools/kernel/selftests.sh` runs the law selftests + the build +
-checkpatch without the card; the hardware regress stays `regress.sh`.
+`tools/kernel/selftests.sh` runs the law selftests, the PCM completion
+selftest (`pcm_selftest.c`: the URB handlers fed simulated URBs), the
+build and checkpatch without the card; the hardware regress stays `regress.sh`.
 
 A userspace client can **claim the proprietary interface via usbfs**
 (`USBDEVFS_DISCONNECT_CLAIM`), which silently detaches the kernel

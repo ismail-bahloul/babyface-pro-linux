@@ -45,7 +45,8 @@ Suspend/resume with full mixer-state restore.
 ## Automated checks
 
 `regress.sh` passes 41/41 on hardware; `selftests.sh` runs the laws, the
-build and checkpatch without the card.
+URB completion handlers on simulated URBs (ring wrap, periods, error runs,
+killed and failed URBs), the build and checkpatch without the card.
 
 ## Why a dedicated driver?
 
