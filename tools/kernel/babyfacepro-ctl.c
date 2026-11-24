@@ -1215,8 +1215,12 @@ static int bf_phantom_put(struct snd_kcontrol *kctl,
 	guard(mutex)(&chip->mutex);
 	cur = !!(chip->preamp & bit);
 	old = chip->preamp;
-	if (on == cur)
-		return 0;
+	/* Send the state even when the cache already agrees: the cache can
+	 * be stale (the unit's 48V can go off without the driver knowing,
+	 * seen after switching a stereo-linked pair one mic at a time), and
+	 * skipping the write then swallowed the request until the unit was
+	 * reset. The preamp state write is idempotent.
+	 */
 	chip->preamp = on ? (chip->preamp | bit) : (chip->preamp & ~bit);
 	ret = bf_preamp_state_write(chip);
 	if (ret < 0) {
@@ -1226,7 +1230,7 @@ static int bf_phantom_put(struct snd_kcontrol *kctl,
 		chip->preamp = old;
 		return ret;
 	}
-	return 1;
+	return on != cur;
 }
 
 /* Ref Level (Instr 3/4) - see the constants' own comment in the
