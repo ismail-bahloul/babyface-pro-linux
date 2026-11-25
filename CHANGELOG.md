@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Fixed
+- `Trim Volume`, `MS Processor Switch` and the phase invert no longer write
+  fixed values into the crosspoint cells behind the crosspoint cache.
+  - Trim wrote the trim level itself into the pair's four AN1/2-block
+    cells, replacing the faders: a trim of -6 wrote 0x1000 (-3 dB on the
+    mono fader curve) with the faders down, and a trim of 0 wrote 0x2000
+    (+3 dB). It now scales the cached levels, as TotalMix's fader x trim,
+    in every output's mix (the FX send stays as it is). A saved positive
+    trim therefore raises the pair in every mix, not only in AN1/2.
+  - MS Processor muted AN2's cells, and a later fader write on AN2 unmuted
+    them while the switch still read on.
+  - A fader or panel-wheel write on a phase-inverted input wrote the plain
+    value and dropped the invert until the next toggle.
+  All three now live in the crosspoint write path (`bf_mono_cell`), as
+  Width and Main Mono do, so faders, the panel wheel and the state restore
+  agree with the cache and the switches; the separate replays at resume
+  are gone.
+
 ## 0.2.4 (2026-11-25)
 
 ### Added
