@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.4 (2026-11-25)
+
 ### Added
 - MIDI: the unit's two ports show up as ALSA rawmidi devices
   (`amidi -l`: `Port 1`, `MIDI 2`) in proprietary mode. The driver used to
@@ -12,6 +14,24 @@
   checked on the unit with usbmon (USB-MIDI packets on bulk 0x07, cable 0
   and 1); input is not checked, nothing was connected to the DIN ports.
   Needs a kernel that exports `__snd_usbmidi_create`.
+- `<source> FX Send` for each of the fourteen sources and `<output> FX
+  Return` for each output pair, TotalMix FX's per-strip "send FX" and
+  "return FX" knobs. A send is the source's crosspoint into the FX bus
+  (0 dB = 0x1000), a return a stereo source on the output's block
+  (0 dB = 0x4000). The words match TotalMix, checked with usbmon on the
+  unit. `FX Send Volume` stays, as the AN1 send.
+- `Main Mono Switch`, the control room's mono button: the stereo sources
+  are summed into the Main pair (PH3/4) by taking their width to 0 for that
+  output only. Switching it on writes the Main crosspoints of a playback
+  pair at half level on both sides, as TotalMix does; checked on the unit.
+- `Dim Level`, how many dB `Dim Switch` takes off (0 to 65, 20 by default),
+  the "Main Out Dim" of TotalMix FX's Mixer Settings. With -9 dB and the
+  Phones at -10 dB the unit gets the same 8-bit value as from TotalMix.
+- `EQ for Record Switch`, the Windows settings dialog's "EQ for Record"
+  box (bit 6 of the settings word, set when it is cleared; on by
+  default). The words match RME's driver, checked with usbmon.
+- Probe checks that the streaming altsettings have the expected interrupt
+  endpoints before using them.
 
 ### Fixed
 - The stream URBs and their DMA buffers are freed at disconnect, not when
@@ -39,38 +59,23 @@
 - `Dim Switch` takes 20 dB off the Phones level instead of setting it to
   -20 dB, which made a quieter level louder. This is what TotalMix writes,
   checked against TotalMix FX on the unit.
+- 48V and PAD are sent even when the driver's cached state already matches.
+  The cache could be stale, and every request to turn 48V back on was then
+  dropped until the unit was reset (#60, thanks to Vyeche).
 
 ### Changed
 - The crosspoints of the stereo sources (AS1/2, the ADAT pairs, the
   playback pairs) use TotalMix's stereo scale: 0 dB is 0x2000 and the top
   is +6 dB at 0x4000, where they shared the mono inputs' scale (0 dB =
-  0x16a0, the pan law's centre). Saved levels keep their raw value, so
-  they sound the same and read 3 dB lower. The playback now defaults to
-  TotalMix's 0 dB, 3 dB above the old default.
+  0x16a0, the pan law's centre). The playback now defaults to TotalMix's
+  0 dB, 3 dB above the old default. After the upgrade, check your levels:
+  on the unit this was tried on, the state saved with 0.2.3 came back at
+  the same dB on the new scale, which is 3 dB louder on every stereo
+  source.
 - `Width` is replaced by a `<source> Width` control per stereo source,
   applied to the source's crosspoints into every output, as TotalMix does.
   The old control wrote fixed values into the AN1 and AN2 crosspoints of
   two outputs, over the levels set there.
-
-### Added
-- `<source> FX Send` for each of the fourteen sources and `<output> FX
-  Return` for each output pair, TotalMix FX's per-strip "send FX" and
-  "return FX" knobs. A send is the source's crosspoint into the FX bus
-  (0 dB = 0x1000), a return a stereo source on the output's block
-  (0 dB = 0x4000). The words match TotalMix, checked with usbmon on the
-  unit. `FX Send Volume` stays, as the AN1 send.
-- `Main Mono Switch`, the control room's mono button: the stereo sources
-  are summed into the Main pair (PH3/4) by taking their width to 0 for that
-  output only. Switching it on writes the Main crosspoints of a playback
-  pair at half level on both sides, as TotalMix does; checked on the unit.
-- `Dim Level`, how many dB `Dim Switch` takes off (0 to 65, 20 by default),
-  the "Main Out Dim" of TotalMix FX's Mixer Settings. With -9 dB and the
-  Phones at -10 dB the unit gets the same 8-bit value as from TotalMix.
-- `EQ for Record Switch`, the Windows settings dialog's "EQ for Record"
-  box (bit 6 of the settings word, set when it is cleared; on by
-  default). The words match RME's driver, checked with usbmon.
-- Probe checks that the streaming altsettings have the expected interrupt
-  endpoints before using them.
 
 ## 0.2.3 (2026-11-05)
 
