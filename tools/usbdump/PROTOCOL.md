@@ -1879,6 +1879,20 @@ re-link, 48V toggle, stereo-mode gain changes. Decoded:
 
 ### Trim (T) — full-range sweep captured (cap_trim.pcap, 2026-08-23, re-fit 2026-08-24)
 
+**CORRECTED 2026-11-26 — reread with the right map.** The "low map" in
+this section is the AN1/2 block of the crosspoint map and the "standard
+map" (0x0034 family) is the PH3/4 block (one map, `0x34 * pair + 0x1A *
+side + source`, see "Output ordering"). So TotalMix writes a value into
+AN1/2 and into PH3/4, not two views of AN1/2. Read that way the formula
+below says the same thing for both blocks: each cell is that output's
+fader times the trim. The "trim alone" value is the AN1/2 cell with its
+fader at 0 dB (0x2000), and the "combined" value is the PH3/4 cell with
+its fader near -11.8 dB. The driver applies the trim this way in every
+output's mix since babyface-pro-linux #63. Not yet checked with a new
+capture: the outputs other than AN1/2 and PH3/4, and why the AN1/2 cell
+sits at 0x2000 rather than the mono 0 dB of 0x16A0 (the strips were
+stereo-linked). The rest of this section is kept as it was written.
+
 The T-panel trim slider writes the SAME crosspoint registers as the
 fader: `0x12 0x0000` (low map AN1) + `0x12 0x0034` (standard
 AN1→out0). Range = 0x0000 (-∞) → 0x4000 (+6.02 dB), center 0x2000 =
