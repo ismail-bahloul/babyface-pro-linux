@@ -586,8 +586,8 @@ static u16 bf_mono_cell(struct snd_usb_babyface *chip, int out, int src,
  * transaction bits of wIndex, and keeps being: issue #31 reads them as the
  * gain's lowest bits, which is a separate question.
  */
-int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
-		    u16 l, u16 r)
+static int bf_xpoint_wire(struct snd_usb_babyface *chip, int out, int src,
+			  u16 l, u16 r)
 {
 	const struct bf_source *s = &bf_sources[src];
 	u16 base_l = BF_REG_XPOINT_BASE_L + BF_REG_XPOINT_STRIDE * out;
@@ -630,6 +630,36 @@ int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
 		return ret;
 	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, bf_width_part(r, w),
 			       (base_r + s->idx_r) | flag);
+}
+
+/* The output pair whose submix Main (PH3/4) plays: its own, or the one
+ * a CUE picked.
+ */
+static int bf_main_feed(struct snd_usb_babyface *chip)
+{
+	return chip->cue ? chip->cue - 1 : BF_OUT_MAIN;
+}
+
+/* Write a crosspoint the mixer set for output pair `out`, following CUE
+ * (TotalMix FX, measured with usbmon 2026-11-26): while an output is
+ * cued, Main's block on the wire carries that output's submix, and
+ * Main's own levels stay in the cache until CUE is released.  So a
+ * write for the cued output also goes to Main's block, and one for Main
+ * waits.  Main's own processing (Main Mono, MS) still applies on its
+ * block.
+ */
+int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
+		    u16 l, u16 r)
+{
+	int ret;
+
+	if (out == BF_OUT_MAIN && bf_main_feed(chip) != BF_OUT_MAIN)
+		return 0;
+	ret = bf_xpoint_wire(chip, out, src, l, r);
+	if (ret < 0 || out == BF_OUT_MAIN || out == BF_OUT_FX ||
+	    bf_main_feed(chip) != out)
+		return ret;
+	return bf_xpoint_wire(chip, BF_OUT_MAIN, src, l, r);
 }
 
 static int bf_xpoint_info(struct snd_kcontrol *kctl,
@@ -1698,6 +1728,76 @@ static int bf_clock_put(struct snd_kcontrol *kctl,
 	return 1;
 }
 
+/* CUE: Main (PH3/4) plays another output pair's submix, as TotalMix
+ * FX's CUE button on an output strip does.  TotalMix rewrites Main's
+ * crosspoint block with the cued output's levels, and with Main's own
+ * when CUE is released (usbmon, 2026-11-26).  Cueing Main itself is the
+ * same as Off.
+ */
+static const char *const bf_cue_texts[] = {
+	"Off", "AN1/2", "PH3/4", "AS1/2", "ADAT3/4", "ADAT5/6", "ADAT7/8", NULL
+};
+
+static int bf_cue_info(struct snd_kcontrol *kctl,
+		       struct snd_ctl_elem_info *uinfo)
+{
+	return snd_ctl_enum_info(uinfo, 1, 7, bf_cue_texts);
+}
+
+static int bf_cue_get(struct snd_kcontrol *kctl,
+		      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.enumerated.item[0] = chip->cue;
+	return 0;
+}
+
+/* Main's block from the cache of the output that feeds it. */
+static int bf_cue_write(struct snd_usb_babyface *chip)
+{
+	int feed = bf_main_feed(chip);
+	int src, ret;
+
+	for (src = 0; src < 14; src++) {
+		ret = bf_xpoint_wire(chip, BF_OUT_MAIN, src,
+				     chip->xpoint[feed][src][0],
+				     chip->xpoint[feed][src][1]);
+		if (ret < 0)
+			return ret;
+	}
+	return 0;
+}
+
+static int bf_cue_put(struct snd_kcontrol *kctl,
+		      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	unsigned int item = ucontrol->value.enumerated.item[0];
+	u8 old;
+	int ret;
+
+	if (item > 6)
+		return -EINVAL;
+	/* Cueing Main is no cue at all. */
+	if (item == BF_OUT_MAIN + 1)
+		item = 0;
+
+	guard(mutex)(&chip->mutex);
+	if (item == chip->cue)
+		return 0;
+	old = chip->cue;
+	chip->cue = item;
+	ret = bf_cue_write(chip);
+	if (ret < 0) {
+		/* Back to the old feed, on the wire too as far as it goes. */
+		chip->cue = old;
+		bf_cue_write(chip);
+		return ret;
+	}
+	return 1;
+}
+
 /* Optical Out format: bit 10 of the same BF_REG_KEEPALIVE_SETTINGS
  * word (PROTOCOL.md, LINUX-VALIDATION.md section 7).  The single optical
  * port carries ADAT by default; S/PDIF mode uses only AS1/2.  Like the
@@ -1815,8 +1915,11 @@ static int bf_ms_write(struct snd_usb_babyface *chip)
 	int out, ret;
 
 	for (out = 0; out <= 1; out++) {
-		ret = bf_xpoint_write(chip, out, 1, chip->xpoint[out][1][0],
-				      chip->xpoint[out][1][1]);
+		/* Main's block carries a cued output's levels (see CUE). */
+		int feed = out == BF_OUT_MAIN ? bf_main_feed(chip) : out;
+
+		ret = bf_xpoint_wire(chip, out, 1, chip->xpoint[feed][1][0],
+				     chip->xpoint[feed][1][1]);
 		if (ret < 0)
 			return ret;
 	}
@@ -2022,17 +2125,19 @@ static int bf_main_mono_put(struct snd_kcontrol *kctl,
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
 	bool on = ucontrol->value.integer.value[0];
 	bool old;
-	int src, ret;
+	int feed, src, ret;
 
 	guard(mutex)(&chip->mutex);
 	if (on == chip->main_mono)
 		return 0;
 	old = chip->main_mono;
 	chip->main_mono = on;
+	feed = bf_main_feed(chip);
 	for (src = BF_SRC_STEREO; src < 14; src++) {
-		ret = bf_xpoint_write(chip, BF_OUT_MAIN, src,
-				      chip->xpoint[BF_OUT_MAIN][src][0],
-				      chip->xpoint[BF_OUT_MAIN][src][1]);
+		/* Main's block, whichever submix feeds it (see CUE). */
+		ret = bf_xpoint_wire(chip, BF_OUT_MAIN, src,
+				     chip->xpoint[feed][src][0],
+				     chip->xpoint[feed][src][1]);
 		if (ret < 0) {
 			chip->main_mono = old;
 			return ret;
@@ -2406,6 +2511,17 @@ int babyface_create_flags(struct snd_usb_babyface *chip)
 		.info = bf_clock_info,
 		.get = bf_clock_get,
 		.put = bf_clock_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "Cue",
+		.info = bf_cue_info,
+		.get = bf_cue_get,
+		.put = bf_cue_put,
 	}, chip);
 	err = snd_ctl_add(chip->card, kctl);
 	if (err < 0)

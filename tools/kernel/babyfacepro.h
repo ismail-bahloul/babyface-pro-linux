@@ -481,6 +481,7 @@ struct snd_usb_babyface {
 	bool dim;			/* DIM engaged (-20 dB on Phones) */
 	u16 dim_steps;			/* DIM's cut in master steps (2 per dB) */
 	bool main_mono;			/* Main Mono: stereo sources summed on Main */
+	u8 cue;				/* CUE: output pair + 1 fed to Main, 0 off */
 
 
 	/* front panel (babyfacepro-ctl.c) - 0x17 readback poll */

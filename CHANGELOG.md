@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+- `Cue`, TotalMix FX's CUE button on an output strip: Main (PH3/4) plays the
+  chosen output pair's submix, and gets its own back with `Off`. Measured
+  against TotalMix FX with usbmon: it rewrites Main's crosspoint block with
+  the cued output's levels, and Main's own on release. While cued, a change
+  to the cued submix reaches Main too, and a change to Main's own waits in
+  the cache. Main Mono and MS still apply on Main's block.
+
 ### Fixed
 - `Trim Volume`, `MS Processor Switch` and the phase invert no longer write
   fixed values into the crosspoint cells behind the crosspoint cache.
