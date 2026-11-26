@@ -3,6 +3,16 @@
 ## Unreleased
 
 ### Added
+- The PCMs have 14 channels: capture channels 13/14 carry the FX bus (the
+  sum of the FX sends), and playback channels 13/14 the FX return. TotalMix
+  FX computes its reverb and echo on the host in the same way: measured with
+  usbmon, its reverb knobs send nothing to the unit. `Host FX Switch` makes
+  the unit mix the FX return into the outputs (each output's `FX Return`
+  sets how much). It is off by default, and sent at every session start
+  because the unit keeps it across sessions and driver reloads. Channels
+  13/14 work at 44.1 and 48 kHz. With PipeWire, the card's pro-audio devices
+  grow from 12 to 14 channels; the two new ones come last, so existing links
+  stay.
 - `Cue`, TotalMix FX's CUE button on an output strip: Main (PH3/4) plays the
   chosen output pair's submix, and gets its own back with `Off`. Measured
   against TotalMix FX with usbmon: it rewrites Main's crosspoint block with

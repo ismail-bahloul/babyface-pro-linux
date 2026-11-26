@@ -5,7 +5,7 @@ unmodified on an original (non-FS) Babyface Pro.
 
 ## Streaming
 
-32 to 192 kHz, 2 to 12 channels, interrupt-URB, full-duplex. 32-frame URBs
+32 to 192 kHz, 2 to 14 channels (13/14 are the FX bus, see below), interrupt-URB, full-duplex. 32-frame URBs
 (0.67 ms at 48 kHz) run clean across the sweep, with one open issue, see
 [Latency](latency.md). 16-frame URBs (0.33 ms, monitoring-grade) are
 playback-solid but drop the occasional capture buffer.
@@ -35,8 +35,11 @@ default), and `Main Mono Switch` sums the stereo sources into the Main pair,
 like the mono button on TotalMix's control room.
 
 Every source has its own `FX Send` and every output pair an `FX Return`,
-TotalMix's "send FX" and "return FX" knobs. The unit's reverb and echo
-parameters are not sent over USB by TotalMix, so only the levels are here.
+TotalMix's "send FX" and "return FX" knobs. The unit has no reverb or echo of
+its own: TotalMix FX computes them on the host. The FX bus (the sum of the
+sends) arrives on capture channels 13/14, and with `Host FX Switch` on, the
+unit mixes playback channels 13/14 into the outputs as the FX return. An
+application can run an effect between the two, at 44.1 and 48 kHz.
 
 ## Power management
 
