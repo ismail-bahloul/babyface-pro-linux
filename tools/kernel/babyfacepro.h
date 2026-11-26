@@ -104,6 +104,14 @@
 #define BF_REQ_STATUS_2			0x1c	/* read 4 B */
 #define BF_REQ_SESSION_START		0x1d
 #define BF_REQ_SESSION_ARM		0x14
+#define BF_REQ_SESSION_DISARM		0x13
+/* With BF_REQ_SESSION_ARM/DISARM: the unit mixes OUT words 12/13 into the
+ * outputs as the FX return.  TotalMix FX sends it when its reverb or echo
+ * goes on, and those effects run on the host: the FX bus comes in on IN
+ * words 12/13 and the effect goes back out on OUT words 12/13 (usbmon
+ * against TotalMix FX, 2026-11-26).
+ */
+#define BF_ARM_HOST_FX			0x0c00
 #define BF_REQ_PREAMP_COMMIT		0x21	/* commit after 0x17 */
 
 #define BF_REG_RATE_FAMILY		0x0030	/* family << 4 (bReq 0x10) */
@@ -474,6 +482,7 @@ struct snd_usb_babyface {
 	bool clock_optical;		/* clock source: false = Internal (default) */
 	bool optical_spdif;		/* Optical Out: false = ADAT (default) */
 	bool eq_not_recorded;		/* EQ for Record off (default: on) */
+	bool host_fx;			/* FX return from the host (BF_ARM_HOST_FX) */
 	s8 xwidth[14];			/* stereo sources' width, -100..100 */
 	u16 fxs[14];			/* FX send per source, 0..0x1000 */
 	u16 fxr[6];			/* FX return per output, 0..0x4000 */
@@ -608,6 +617,7 @@ int bf_dim_apply(struct snd_usb_babyface *chip, bool on);
 int bf_fx_restore(struct snd_usb_babyface *chip);
 int babyface_create_fx_levels(struct snd_usb_babyface *chip);
 int babyface_create_flags(struct snd_usb_babyface *chip);
+int bf_host_fx_write(struct snd_usb_babyface *chip);
 int babyface_create_panel(struct snd_usb_babyface *chip);
 void babyface_panel_start(struct snd_usb_babyface *chip);
 void babyface_panel_stop(struct snd_usb_babyface *chip);

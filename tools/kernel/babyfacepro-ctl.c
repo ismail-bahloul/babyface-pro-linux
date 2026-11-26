@@ -1846,6 +1846,52 @@ static int bf_optical_put(struct snd_kcontrol *kctl,
 	return 1;
 }
 
+/* Host FX: TotalMix FX runs its reverb and echo on the host.  The unit
+ * sends the FX bus on capture channels 13/14 and, while this is on, mixes
+ * playback channels 13/14 into the outputs as the FX return (each output's
+ * FX Return sets how much).  So an application can run an effect between
+ * the two.  Off by default: those playback channels are silent otherwise,
+ * but an application that plays 14 channels of something else would be
+ * heard.  The unit keeps it across sessions, and so does a driver reload,
+ * so each session start sends it, on or off.
+ */
+int bf_host_fx_write(struct snd_usb_babyface *chip)
+{
+	return bf_vendor_write(chip, chip->host_fx ? BF_REQ_SESSION_ARM :
+			       BF_REQ_SESSION_DISARM, BF_ARM_HOST_FX, 0x0000);
+}
+
+static int bf_host_fx_get(struct snd_kcontrol *kctl,
+			  struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+
+	ucontrol->value.integer.value[0] = chip->host_fx;
+	return 0;
+}
+
+static int bf_host_fx_put(struct snd_kcontrol *kctl,
+			  struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
+	bool on = ucontrol->value.integer.value[0];
+	int ret;
+
+	guard(mutex)(&chip->mutex);
+	if (on == chip->host_fx)
+		return 0;
+	chip->host_fx = on;
+	/* Without a session it goes out with the next one. */
+	if (!READ_ONCE(chip->streaming))
+		return 1;
+	ret = bf_host_fx_write(chip);
+	if (ret < 0) {
+		chip->host_fx = !on;
+		return ret;
+	}
+	return 1;
+}
+
 /* EQ for Record: whether the strips' EQ also acts on the capture path
  * (the Windows settings dialog's box, on by default).  Bit 6 of the
  * settings word, set when the box is cleared.
@@ -2533,6 +2579,17 @@ int babyface_create_flags(struct snd_usb_babyface *chip)
 		.info = bf_optical_info,
 		.get = bf_optical_get,
 		.put = bf_optical_put,
+	}, chip);
+	err = snd_ctl_add(chip->card, kctl);
+	if (err < 0)
+		return err;
+
+	kctl = snd_ctl_new1(&(struct snd_kcontrol_new){
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = "Host FX Switch",
+		.info = bf_switch_info,
+		.get = bf_host_fx_get,
+		.put = bf_host_fx_put,
 	}, chip);
 	err = snd_ctl_add(chip->card, kctl);
 	if (err < 0)

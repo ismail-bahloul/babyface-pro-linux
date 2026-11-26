@@ -451,7 +451,9 @@ static bool babyface_capture_copy(struct snd_usb_babyface *chip,
 		 * appeared on words 4/5.  Each word is a 24-bit sample in
 		 * bits 31-8, which is S32_LE with 24 msbits, so the words go
 		 * over as they are.  At 96/192 kHz the frame has fewer words
-		 * (10/8); the channels past them read as zero.
+		 * (10/8); the channels past them read as zero.  Words 12/13
+		 * at 44.1/48 kHz are the FX bus (the sum of the FX sends), for
+		 * an effect computed on the host: see BF_ARM_HOST_FX.
 		 */
 		memcpy(dst, data + f * chip->frame_bytes, copy);
 		if (chans > words)
@@ -499,8 +501,9 @@ static bool babyface_playback_copy(struct snd_usb_babyface *chip,
 		u8 *frame = data + f * chip->frame_bytes;
 
 		src = rt->dma_area + frames_to_bytes(rt, pos);
-		/* App ch n feeds the device word n (PB1-6 = words 0-11);
-		 * words 12/13 stay zero.  The app's 24 valid bits are already
+		/* App ch n feeds the device word n: PB1-6 are words 0-11,
+		 * and channels 13/14 (words 12/13) the FX return at 44.1/48
+		 * kHz, mixed in only while Host FX Switch is on.  The app's 24 valid bits are already
 		 * left-justified (bits 31-8), so the words go over as they
 		 * are.  At 96/192 kHz the frame is shorter - the extra app
 		 * channels are dropped.
@@ -847,6 +850,13 @@ static int babyface_stream_start(struct snd_usb_babyface *chip)
 	ret = bf_vendor_write(chip, BF_REQ_SESSION_ARM, 0x0000, 0xc000);
 	if (ret < 0)
 		goto err;
+	/* The host FX return, on or off (see Host FX Switch): the unit
+	 * keeps it across sessions and driver reloads, so it is sent either
+	 * way.
+	 */
+	ret = bf_host_fx_write(chip);
+	if (ret < 0)
+		goto err;
 
 	dev_dbg(&chip->dev->dev, "stream started (%u frames/URB, %u URBs)\n",
 		chip->urb_frames, chip->urbs_active);
@@ -901,7 +911,7 @@ static const struct snd_pcm_hardware babyface_pcm_hw = {
 	.rate_min = 32000,
 	.rate_max = 192000,
 	.channels_min = 2,
-	.channels_max = 12,
+	.channels_max = 14,
 	.buffer_bytes_max = 1 << 20,
 	.period_bytes_max = 1 << 18,
 	.periods_min = 2,

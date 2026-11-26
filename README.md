@@ -22,7 +22,7 @@ interrupt endpoints and the TotalMix-class control surface shows up as a
 normal ALSA mixer. Reverse-engineered from Windows captures, validated on real
 hardware, and the only implementation of this mode on Linux.
 
-- **Every channel**: 2 to 12 channels, 32 to 192 kHz, full-duplex
+- **Every channel**: 2 to 14 channels (13/14 for host FX), 32 to 192 kHz, full-duplex
 - **The whole DSP mixer** as ALSA controls: masters, 6x14 crosspoints, preamps, phantom, EQ
 - **Front panel** decoded: buttons, wheel, DIM, with suspend/resume restore
 - **Low latency** down to 0.33 ms, opt-in
