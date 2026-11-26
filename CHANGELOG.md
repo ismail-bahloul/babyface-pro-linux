@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.5 (2026-11-26)
+
 ### Added
 - The PCMs have 14 channels: capture channels 13/14 carry the FX bus (the
   sum of the FX sends), and playback channels 13/14 the FX return. TotalMix
