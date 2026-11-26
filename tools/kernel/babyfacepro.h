@@ -194,9 +194,6 @@
 #define BF_REG_XPOINT_BASE_L		0x0000	/* + 0x34*pair + idx_l */
 #define BF_REG_XPOINT_BASE_R		0x001a	/* + 0x34*pair + idx_r */
 #define BF_REG_XPOINT_STRIDE		0x0034
-/* The AN1/2 block, for the features that only reach that output. */
-#define BF_REG_LOWMAP_BASE_L		BF_REG_XPOINT_BASE_L
-#define BF_REG_LOWMAP_BASE_R		BF_REG_XPOINT_BASE_R
 
 #define BF_REQ_LOOPBACK			0x15	/* per-output-channel flag */
 
@@ -448,16 +445,14 @@ struct snd_usb_babyface {
 	bool phase[4];			/* polarity invert, AN1-4 (bf_sources 0-3);
 					 * xpoint[][0..3][0] stays the PLAIN
 					 * value, only the wire write is
-					 * negated - see bf_phase_put's own
-					 * comment for the known limitation
-					 * this implies.
+					 * negated, in the crosspoint write
+					 * path (bf_mono_cell).
 					 */
 	int trim[4];			/* Trim (T), dB (-65..+6), AN1-4;
-					 * one shared register per pair, so
-					 * both entries of a pair are kept
-					 * equal; same "wire-only" caveat as
-					 * phase - see bf_trim_apply's own
-					 * comment.
+					 * one value per pair, so both
+					 * entries of a pair are kept equal;
+					 * scales the cached crosspoints on
+					 * the wire (bf_mono_cell).
 					 */
 	bool split[6];			/* stereo split, playback pairs PB1-PB6
 					 * (bf_sources idx 8-13); fixed
@@ -604,7 +599,7 @@ int bf_preamp_state_write(struct snd_usb_babyface *chip);
 int bf_preamp_commit(struct snd_usb_babyface *chip);
 int bf_phase_apply(struct snd_usb_babyface *chip, int mic, bool invert);
 int bf_split_apply(struct snd_usb_babyface *chip, int pb, bool split);
-int bf_trim_apply(struct snd_usb_babyface *chip, int mic, int trim_db2);
+int bf_trim_apply(struct snd_usb_babyface *chip, int mic);
 int bf_gain_max_db(int mic);
 u8 bf_gain_raw(int mic, int db);
 int bf_loopback_write_map(struct snd_usb_babyface *chip, int out, bool on);

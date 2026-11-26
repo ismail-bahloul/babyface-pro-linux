@@ -532,6 +532,43 @@ static u16 bf_width_part(u16 level, int w)
 	return (u16)(((u32)level * (u32)(100 + w) + 100) / 200);
 }
 
+/* What a mono input's (AN1-4) crosspoint carries on the wire for the
+ * level the mixer set, on side `left` (the L register) or not:
+ *  - an engaged MS processor mutes AN2 in the AN1/2 and PH3/4 blocks;
+ *  - the pair's Trim scales the level in every output's mix (the DSP
+ *    applies it globally, PROTOCOL.md "Trim"), as TotalMix's
+ *    fader x trim; the FX send (BF_OUT_FX) is left as it is;
+ *  - a phase invert NOTs the L register in every output's mix, a zero
+ *    cell staying zero (cap_ms2 writes 0x0000, not 0xffff).
+ * The cache (chip->xpoint) keeps the mixer's own level either way.
+ * Every write of a mono input's cell goes through here (the crosspoint
+ * write, the panel wheel), so faders, Trim, MS, phase and the state
+ * restore all agree, and nothing is written behind the cache.
+ *
+ * The cells are linear (0x16a0 = 0 dB), so the trim is the master
+ * curve's gain over its 0 dB.  A fader near its top with a positive
+ * trim is clamped to the fader's top, so that pair's balance can shift
+ * there.
+ */
+static u16 bf_mono_cell(struct snd_usb_babyface *chip, int out, int src,
+			u16 level, bool left)
+{
+	u32 v = level;
+
+	if (src >= BF_SRC_STEREO)
+		return level;
+	if (chip->ms_proc && src == 1 && out <= 1) {
+		v = 0;
+	} else if (out < BF_OUT_FX && chip->trim[src]) {
+		v = (v * bf_master_16bit(chip->trim[src] * 2) +
+		     BF_MASTER_0DB / 2) / BF_MASTER_0DB;
+		v = min_t(u32, v, BF_FADER_TOP);
+	}
+	if (left && out < BF_OUT_FX && chip->phase[src] && v)
+		v = (u16)~v;
+	return (u16)v;
+}
+
 /* Write a crosspoint slot on the wire: the pair's block of the map, see
  * BF_REG_XPOINT_BASE_L.
  *
@@ -563,11 +600,13 @@ int bf_xpoint_write(struct snd_usb_babyface *chip, int out, int src,
 		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
 	}
 	if (src < BF_SRC_STEREO) {
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, l,
+		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+				      bf_mono_cell(chip, out, src, l, true),
 				      (base_l + s->idx_l) | flag);
 		if (ret < 0)
 			return ret;
-		return bf_vendor_write(chip, BF_REQ_CROSSPOINT, r,
+		return bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+				       bf_mono_cell(chip, out, src, r, false),
 				       (base_r + s->idx_r) | flag);
 	}
 
@@ -764,52 +803,45 @@ int bf_preamp_state_write(struct snd_usb_babyface *chip)
 
 /* Phase (polarity) invert (AN1-4 only, PROTOCOL.md "Phase toggle",
  * hardware-verified 2026-08-23): NEGATE (bitwise NOT, not two's
- * complement) the L crosspoint register on every output pair's
- * standard map, plus the AN1/2 low-map shadow specifically (the same
- * single low-map register set CUE/mute/solo already use for that
- * monitor bus - see this driver's own bf_ms_put for the address
- * pattern). `chip->xpoint[out][mic][0]` is deliberately left holding
- * the PLAIN value the user actually set - only the value WRITTEN to
- * hardware is negated - so the crosspoint control's own readback still
- * reports the real fader position while phase is engaged.
+ * complement) the L crosspoint register on every output pair's block.
+ * `chip->xpoint[out][mic][0]` keeps the PLAIN value the user set - only
+ * the value WRITTEN to hardware is negated (bf_mono_cell) - so the
+ * crosspoint control's readback still reports the real fader position.
  *
- * KNOWN LIMITATION, same class TuxMix's own USB backend already has
- * in `usb.rs::set_phase` (not fixed there either, as of this writing):
- * this negates the CURRENT register value once, at toggle time. A
- * later `bf_xpoint_put` on the same [out][mic] slot (i.e. the user
- * drags that fader again while phase is engaged) writes the plain
- * value, silently un-inverting phase until the user re-toggles it.
- * Making the crosspoint hot path itself phase-aware would close this
- * properly, but touches every one of the 84 crosspoint controls'
- * write path - out of scope for this pass; flagged rather than
- * silently shipped.
+ * The negation lives in the crosspoint write path, so a later fader or
+ * panel-wheel write on the same slot keeps it (it used to write the
+ * plain value and silently un-invert phase until the next toggle).
+ * This sets the flag and rewrites the input's cells from the cache.
  */
-int bf_phase_apply(struct snd_usb_babyface *chip, int mic, bool invert)
+/* The input's cells in every output's mix, from the cache. */
+static int bf_phase_write(struct snd_usb_babyface *chip, int mic)
 {
-	const struct bf_source *s = &bf_sources[mic];
 	int out, ret;
-	u16 flag;
 
-	for (out = 0; out < 6; out++) {
-		u16 plain = chip->xpoint[out][mic][0];
-		u16 value = invert ? (u16)~plain : plain;
-
-		/* The AN1/2 block is written without the rotating bits, as
-		 * bf_xpoint_write() does.
-		 */
-		flag = 0;
-		if (out) {
-			flag = bf_flag_cycle[chip->flag_cnt];
-			chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-		}
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, value,
-				      (BF_REG_XPOINT_BASE_L +
-				       BF_REG_XPOINT_STRIDE * out + s->idx_l) |
-				      flag);
+	for (out = 0; out < BF_OUT_FX; out++) {
+		ret = bf_xpoint_write(chip, out, mic, chip->xpoint[out][mic][0],
+				      chip->xpoint[out][mic][1]);
 		if (ret < 0)
 			return ret;
 	}
 	return 0;
+}
+
+int bf_phase_apply(struct snd_usb_babyface *chip, int mic, bool invert)
+{
+	bool was = chip->phase[mic];
+	int ret;
+
+	chip->phase[mic] = invert;
+	ret = bf_phase_write(chip, mic);
+	if (ret < 0) {
+		/* Back to the old polarity, on the wire too as far as it
+		 * goes: a write may have landed before the one that failed.
+		 */
+		chip->phase[mic] = was;
+		bf_phase_write(chip, mic);
+	}
+	return ret;
 }
 
 static int bf_phase_info(struct snd_kcontrol *kctl,
@@ -846,7 +878,6 @@ static int bf_phase_put(struct snd_kcontrol *kctl,
 	ret = bf_phase_apply(chip, mic, invert);
 	if (ret < 0)
 		return ret;
-	chip->phase[mic] = invert;
 	return 1;
 }
 
@@ -1002,57 +1033,44 @@ static u16 bf_fader_db2_to_raw(int db2)
 	return bf_fader_curve[ARRAY_SIZE(bf_fader_curve) - 1].raw;
 }
 
-/* Input Trim (T button, AN1-4): PROTOCOL.md "Trim (T) write for the
- * AN1/2 pair" (cap_trim2/3/4.pcap, hardware-verified) - the analog
- * input's own gain-trim, applied through the crosspoint registers
- * exactly like a fader (there is no separate trim register).  It
- * writes the trim alone on the MASTER curve (0x2000 = 0 dB,
- * `bf_master_16bit`) into the AN1/2 block, all 4 registers of the pair
- * (both AN1+AN2 or both AN3+AN4, matching the vendor software's
- * linked-strip behaviour); `mic` may be either channel of the pair, and
- * the base is derived (`mic & ~1`) so the write always lands on the
- * correct pair's registers regardless of which channel's control
- * triggered it.  Destination is always the AN1/2 monitor bus, the same
- * scope the MS-processor and CUE writes have, and the same one the
- * vendor software's Trim reaches.
+/* Input Trim (T button, AN1-4): PROTOCOL.md "Trim (T)" (cap_trim*.pcap,
+ * hardware-verified) - the analog input's own gain-trim, applied through
+ * the crosspoint registers (there is no separate trim register).  The
+ * captures pin TotalMix's value for a cell as fader x trim
+ * (`standard_raw`), and note that the DSP applies the trim globally while
+ * TotalMix re-emits only the selected submix.  So the driver scales the
+ * pair's cached levels in every output's mix (`bf_mono_cell`) and
+ * rewrites both channels' cells from the cache; `mic` may be either
+ * channel of the pair, and the base is derived (`mic & ~1`).  The FX
+ * send is left as it is.
  *
- * It also wrote the fader and the trim summed, on the fader curve, to a
- * "standard map" at 0x0068.  That block is AS1/2's submix (see
- * bf_xpoint_write), so those writes never reached AN1/2: they only
- * overwrote AS1/2's own crosspoints for these inputs, and are gone.
+ * It used to write the trim alone, on the MASTER curve (0x2000 = 0 dB),
+ * into the pair's four AN1/2-block cells: that replaced the faders
+ * instead of scaling them, behind the crosspoint cache.  A trim of -6
+ * wrote 0x1000, putting both inputs into AN1/2 at -3 dB on the mono
+ * curve with their faders down, and a trim of 0 wrote 0x2000 (+3 dB).
  *
- * Trim is a genuinely SHARED value per pair on real hardware (one
- * write always touches both channels' registers) but is exposed as 2
- * per-channel ALSA controls, one per input strip. `bf_trim_put` keeps
- * the pair's two cache entries equal and notifies the sibling control,
- * so the cache never claims a per-channel split the hardware cannot
- * represent - and `bf_state_apply_flags`, which replays the pair from
- * its even index, always replays the value that is actually on the
- * wire.
+ * Trim is one value per pair, as TotalMix's linked strips write it, but
+ * is exposed as 2 per-channel ALSA controls, one per input strip.
+ * `bf_trim_put` keeps the pair's two entries equal and notifies the
+ * sibling control, so the cache never claims a split the strips don't
+ * have.
  */
-int bf_trim_apply(struct snd_usb_babyface *chip, int mic, int trim_db2)
+int bf_trim_apply(struct snd_usb_babyface *chip, int mic)
 {
 	int base = mic & ~1;
-	int sib = base + 1;
-	const struct bf_source *sb = &bf_sources[base];
-	const struct bf_source *ss = &bf_sources[sib];
-	u16 trim_raw = bf_master_16bit(trim_db2);
-	int ret;
+	int out, src, ret;
 
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, trim_raw,
-			      BF_REG_LOWMAP_BASE_L + sb->idx_l);
-	if (ret < 0)
-		return ret;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, trim_raw,
-			      BF_REG_LOWMAP_BASE_R + sb->idx_r);
-	if (ret < 0)
-		return ret;
-	ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, trim_raw,
-			      BF_REG_LOWMAP_BASE_L + ss->idx_l);
-	if (ret < 0)
-		return ret;
-	return bf_vendor_write(chip, BF_REQ_CROSSPOINT, trim_raw,
-			       BF_REG_LOWMAP_BASE_R + ss->idx_r);
+	for (out = 0; out < BF_OUT_FX; out++) {
+		for (src = base; src <= base + 1; src++) {
+			ret = bf_xpoint_write(chip, out, src,
+					      chip->xpoint[out][src][0],
+					      chip->xpoint[out][src][1]);
+			if (ret < 0)
+				return ret;
+		}
+	}
+	return 0;
 }
 
 /* Trim's control value is dB as well, -65..+6. */
@@ -1082,25 +1100,34 @@ static int bf_trim_put(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *uco
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
 	int mic = kctl->private_value;
 	int sib = mic ^ 1;
-	int db = ucontrol->value.integer.value[0];
+	long db = ucontrol->value.integer.value[0];
 	int ret = 0;
 
 	if (db < -65 || db > 6)
 		return -EINVAL;
 
 	scoped_guard(mutex, &chip->mutex) {
-		if (db == chip->trim[mic])
+		int old = chip->trim[mic];
+
+		if (db == old)
 			return 0;
-		ret = bf_trim_apply(chip, mic, db * 2);
-		if (ret < 0)
-			return ret;
-		/* One register per pair on the wire, so both channels of the
-		 * pair really did change: mirror the cache (the state restore
-		 * replays the pair from the even index) and tell user space
-		 * about the sibling control.
+		/* One value per pair, so both channels of the pair change:
+		 * mirror the cache and tell user space about the sibling
+		 * control.  Set first, since the write reads it.
 		 */
 		chip->trim[mic] = db;
 		chip->trim[sib] = db;
+		ret = bf_trim_apply(chip, mic);
+		if (ret < 0) {
+			/* Back to the old trim, on the wire too as far as
+			 * it goes: a write may have landed before the one
+			 * that failed.
+			 */
+			chip->trim[mic] = old;
+			chip->trim[sib] = old;
+			bf_trim_apply(chip, mic);
+			return ret;
+		}
 		ret = 1;
 	}
 	if (ret == 1 && chip->trim_kctl[sib])
@@ -1782,6 +1809,20 @@ static int bf_link_put(struct snd_kcontrol *kctl,
 	return 1;
 }
 
+/* AN2's cells in the AN1/2 and PH3/4 blocks, from the cache. */
+static int bf_ms_write(struct snd_usb_babyface *chip)
+{
+	int out, ret;
+
+	for (out = 0; out <= 1; out++) {
+		ret = bf_xpoint_write(chip, out, 1, chip->xpoint[out][1][0],
+				      chip->xpoint[out][1][1]);
+		if (ret < 0)
+			return ret;
+	}
+	return 0;
+}
+
 static int bf_ms_get(struct snd_kcontrol *kctl,
 		     struct snd_ctl_elem_value *ucontrol)
 {
@@ -1791,11 +1832,13 @@ static int bf_ms_get(struct snd_kcontrol *kctl,
 	return 0;
 }
 
-/* MS-proc: engage per the cap_ms2.pcap ON pattern - write 0x0000 to
- * the four AN2 (side) crosspoints, AN1/2 0x0001/0x001B and PH3/4
+/* MS-proc: engage per the cap_ms2.pcap ON pattern - 0x0000 in the
+ * four AN2 (side) crosspoints, AN1/2 0x0001/0x001B and PH3/4
  * 0x0035/0x004F - the side path is muted (ear-verified 2026-08-26
  * with the mic on AN2: MS ON = silence); release restores each
- * block's cached fader values (host-side, like TotalMix).
+ * block's cached fader values (host-side, like TotalMix).  The mute
+ * lives in bf_mono_cell(), so a fader write while engaged stays muted
+ * and the state restore replays it from the cache.
  * (The 0x1000/0x0004 writes are the DISENGAGE restore values seen in
  * cap_ms2 - the driver had them inverted on the engage path.)
  */
@@ -1804,40 +1847,24 @@ static int bf_ms_put(struct snd_kcontrol *kctl,
 {
 	struct snd_usb_babyface *chip = snd_kcontrol_chip(kctl);
 	bool on = ucontrol->value.integer.value[0];
-	int ret = 0;
+	int ret;
 
 	guard(mutex)(&chip->mutex);
 	if (on == chip->ms_proc)
 		return 0;
-	if (on) {
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x0035);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x004f);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x0001);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x001b);
-		if (ret < 0)
-			return ret;
-	} else {
-		/* Restore each block's own AN2 crosspoint: 0x0001/0x001B
-		 * is the AN1/2 pair, 0x0035/0x004F is PH3/4.
-		 */
-		ret = bf_xpoint_write(chip, 0, 1,
-				      chip->xpoint[0][1][0],
-				      chip->xpoint[0][1][1]);
-		if (ret < 0)
-			return ret;
-		ret = bf_xpoint_write(chip, 1, 1,
-				      chip->xpoint[1][1][0],
-				      chip->xpoint[1][1][1]);
-		if (ret < 0)
-			return ret;
-	}
+	/* The flag first: bf_xpoint_write() mutes AN2 in the AN1/2 and
+	 * PH3/4 blocks while it is set (bf_mono_cell), and writes each
+	 * block's cached level back, phase and trim included, when it is
+	 * cleared.  On a failed write the old state goes back, on the wire
+	 * too as far as it goes.
+	 */
 	chip->ms_proc = on;
+	ret = bf_ms_write(chip);
+	if (ret < 0) {
+		chip->ms_proc = !on;
+		bf_ms_write(chip);
+		return ret;
+	}
 	return 1;
 }
 
@@ -2709,10 +2736,12 @@ static void bf_panel_mix_wheel(struct snd_usb_babyface *chip, int delta)
 		}
 		flag = bf_flag_cycle[chip->flag_cnt];
 		chip->flag_cnt = (chip->flag_cnt + 1) & 3;
-		bf_vendor_write(chip, BF_REQ_CROSSPOINT, raw,
+		bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+				bf_mono_cell(chip, out, targets[i], raw, true),
 				(BF_REG_XPOINT_BASE_L + BF_REG_XPOINT_STRIDE * out +
 				 s->idx_l) | flag);
-		bf_vendor_write(chip, BF_REQ_CROSSPOINT, raw,
+		bf_vendor_write(chip, BF_REQ_CROSSPOINT,
+				bf_mono_cell(chip, out, targets[i], raw, false),
 				(BF_REG_XPOINT_BASE_R + BF_REG_XPOINT_STRIDE * out +
 				 s->idx_r) | flag);
 		chip->xpoint[out][targets[i]][0] = raw;

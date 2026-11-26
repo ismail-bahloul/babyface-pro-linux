@@ -355,9 +355,10 @@ int babyface_restore_state(struct snd_usb_babyface *chip)
 }
 
 /* Re-apply the state that sits on top of the masters and crosspoints
- * (the routing flags, DIM, phase invert, stereo split, trim) after a
- * state restore.  The write patterns mirror the corresponding _put()
- * handlers.  Caller holds chip->mutex.
+ * (the routing flags, DIM, stereo split) after a state restore.  MS,
+ * Trim and phase invert ride on the crosspoints themselves.  The write
+ * patterns mirror the corresponding _put() handlers.  Caller holds
+ * chip->mutex.
  */
 int bf_state_apply_flags(struct snd_usb_babyface *chip)
 {
@@ -389,23 +390,10 @@ int bf_state_apply_flags(struct snd_usb_babyface *chip)
 	if (ret < 0)
 		return ret;
 
-	if (chip->ms_proc) {
-		/* Same ON pattern as bf_ms_put (cap_ms2.pcap): mute the
-		 * AN2 (side) crosspoints on AN1/2 and PH3/4.
-		 */
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x0035);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x004f);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x0001);
-		if (ret < 0)
-			return ret;
-		ret = bf_vendor_write(chip, BF_REQ_CROSSPOINT, 0x0000, 0x001b);
-		if (ret < 0)
-			return ret;
-	}
+	/* An engaged MS processor, Trim and phase invert come back with
+	 * babyface_restore_state()'s crosspoint loop (bf_mono_cell), and at
+	 * probe all three are off: nothing is written behind the cache.
+	 */
 
 	/* Re-apply an engaged DIM.  bf_dim_apply() rebuilds dim_saved
 	 * from the Phones master, which is still zero on a fresh chip,
@@ -415,23 +403,6 @@ int bf_state_apply_flags(struct snd_usb_babyface *chip)
 		ret = bf_dim_apply(chip, true);
 		if (ret < 0)
 			return ret;
-	}
-
-	/* Re-apply any engaged Phase invert - the crosspoint restore loop
-	 * above already re-wrote xpoint[][] as PLAIN values, so a phase
-	 * negation needs to be re-asserted on top, the same way the ON
-	 * state itself is applied (bf_phase_apply).
-	 */
-	{
-		int mic;
-
-		for (mic = 0; mic < 4; mic++) {
-			if (!chip->phase[mic])
-				continue;
-			ret = bf_phase_apply(chip, mic, true);
-			if (ret < 0)
-				return ret;
-		}
 	}
 
 	/* Re-apply any engaged stereo split (fixed constants, no fader
@@ -449,24 +420,6 @@ int bf_state_apply_flags(struct snd_usb_babyface *chip)
 		}
 	}
 
-	/* Re-apply any non-zero Trim (fader+trim combined, same reasoning
-	 * as phase - see bf_trim_apply's own comment). Only the pair's
-	 * even index needs to fire this (it always writes both channels),
-	 * and bf_trim_put keeps both entries of a pair equal, so the even
-	 * index holds the value that is really on the wire even when the
-	 * odd channel's control was the one the user touched.
-	 */
-	{
-		int mic;
-
-		for (mic = 0; mic < 4; mic += 2) {
-			if (!chip->trim[mic])
-				continue;
-			ret = bf_trim_apply(chip, mic, chip->trim[mic] * 2);
-			if (ret < 0)
-				return ret;
-		}
-	}
 	return 0;
 }
 
