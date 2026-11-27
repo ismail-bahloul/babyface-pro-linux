@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.2.5 (2026-11-26)
+## 0.2.5 (2026-11-27)
 
 ### Added
 - The PCMs have 14 channels: capture channels 13/14 carry the FX bus (the
